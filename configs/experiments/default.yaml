@@ -1,0 +1,9 @@
+_base_: ../base.yaml
+
+data:
+  data_paths:
+    - examples/test_data.csv.gz
+
+train:
+  device: cuda
+  epochs: 2

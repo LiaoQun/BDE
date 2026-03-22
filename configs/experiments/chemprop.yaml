@@ -1,0 +1,14 @@
+_base_: ../base.yaml
+
+data:
+  featurizer_type: ChemPropFeaturizer
+  sample_percentage: 1.0
+
+model:
+  atom_features: 128
+  num_messages: 3
+
+train:
+  device: cpu
+  epochs: 5
+  batch_size: 32

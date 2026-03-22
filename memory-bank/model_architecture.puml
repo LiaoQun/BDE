@@ -1,0 +1,86 @@
+@startuml BDE Prediction Model Architecture
+
+skinparam componentStyle uml2
+skinparam packageStyle rect
+
+package "Data Preparation (src/features/featurizer.py)" {
+    [SMILES String\n("CCO")] as SMILES
+    [RDKit Mol Object] as Mol
+    [mol_to_graph] as Featurizer
+
+    SMILES --> Mol : Chem.MolFromSmiles
+    Mol --> Featurizer
+
+    [PyG Data Object] as DataObj
+    Featurizer --> DataObj
+    
+    note right of Featurizer
+        **Output Graph Contains:**
+        - x: Atom IDs [num_atoms]
+        - edge_index: Connectivity [2, num_bonds]
+        - edge_attr: Bond Type IDs [num_bonds]
+        - y: BDE Labels [num_bonds]
+        - **mask**: Loss Mask [num_bonds]
+    end note
+}
+
+package "Model (src/models/mpnn.py)" {
+    [BDEModel]
+    
+    package "1. Embedding Layers" {
+        [Atom Embedding] as AtomEmb
+        [Bond Embedding] as BondEmb
+        [Bond Mean Embedding] as BondMeanEmb
+        note right of BondMeanEmb : **Special Design 1**\nLearns a baseline BDE\nfor each bond type.
+    }
+
+    package "2. Interaction Layers (Message Passing)" {
+        [BDEInteractionLayer] as Interaction
+        note bottom of Interaction
+            **Special Design 2 & 3**
+            - Updates both Atom & Bond states.
+            - Uses Residual Connections.
+        end note
+        
+        [Edge Update MLP]
+        [Node Update MLP]
+        Interaction -down-> [Edge Update MLP]
+        Interaction -down-> [Node Update MLP]
+    }
+    
+    package "3. Output Layer" {
+        [Output MLP]
+    }
+    
+    DataObj -down-> BDEModel
+
+    BDEModel -> AtomEmb : data.x
+    BDEModel -> BondEmb : data.edge_attr
+    BDEModel -> BondMeanEmb : data.edge_attr (for lookup)
+
+    AtomEmb --> Interaction : atom_state
+    BondEmb --> Interaction : bond_state
+    
+    Interaction ..> Interaction : "num_messages" times
+    
+    Interaction --> [Output MLP] : final_bond_state
+
+    [Final BDE Prediction] as Prediction
+    [Output MLP] --> Prediction
+    BondMeanEmb --> Prediction : Add baseline
+}
+
+package "Training (src/training/trainer.py)" {
+    [Masked MAE Loss] as Loss
+    
+    Prediction --> Loss
+    DataObj --> Loss : data.y, data.mask
+    
+    note right of Loss
+        Loss is computed only where
+        **data.mask is True**.
+        `L1(pred[mask], y[mask])`
+    end note
+}
+
+@enduml

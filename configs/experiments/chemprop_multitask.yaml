@@ -1,0 +1,21 @@
+_base_: ../base.yaml
+
+data:
+  data_paths:
+    - examples/bde-db2.csv.gz
+  featurizer_type: ChemPropFeaturizer
+  sample_percentage: 0.01
+  target_columns:
+    - bde
+    - bdfe
+    - bdscfe
+
+model:
+  atom_features: 128
+  num_messages: 3
+  num_tasks: 3
+
+train:
+  device: cpu
+  epochs: 5
+  batch_size: 32

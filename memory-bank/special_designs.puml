@@ -1,0 +1,75 @@
+@startuml BDE Special Designs
+skinparam componentStyle uml2
+skinparam packageStyle rect
+
+title Model Special Designs for Accuracy
+
+package "Special Design 1: Bond Mean Prior (化學鍵均值預測)" {
+    component "Bond Mean Embedding" as BondMeanEmb <<Embedding Layer>>
+    component "Final GNN Output (from Interaction Layers)" as GNNOutput
+    component "Prediction MLP (from BDEModel)" as PredMLP
+
+    GNNOutput --> PredMLP : Final bond_state
+    PredMLP --> PredictionComponent : GNN Prediction Term
+
+    BondMeanEmb --> PredictionComponent : Bond Type Baseline
+    note right of BondMeanEmb
+        Learns a distinct baseline BDE for
+        each bond type (e.g., C-C, C-H).
+    end note
+
+    ' component "Final BDE Prediction" as PredictionComponent
+    note right of PredictionComponent : Prediction = GNN_Term + Baseline_Term
+    PredMLP -[hidden]-> PredictionComponent
+    BondMeanEmb -[hidden]-> PredictionComponent
+}
+
+package "Special Design 2: BDEInteractionLayer (原子/鍵同步更新與殘差連接)" {
+    component "Input Atom State (h_v)" as InputHV
+    component "Input Bond State (h_e)" as InputHE
+    
+    component "BatchNorm (Atom)" as BN_HV
+    component "BatchNorm (Bond)" as BN_HE
+
+    InputHV --> BN_HV
+    InputHE --> BN_HE
+
+    package "Edge Update" {
+        component "Gather (src, dst Atom States + Bond State)" as GatherEdge
+        component "Edge MLP" as EdgeMLP
+        component "Residual Connection (Edge)" as ResConnEdge
+        note right of ResConnEdge : h_e_new = h_e + MLP(concat(...))
+    }
+
+    BN_HE --> GatherEdge : h_e
+    BN_HV --> GatherEdge : h_v[src], h_v[dst]
+
+    GatherEdge --> EdgeMLP
+    EdgeMLP --> ResConnEdge
+    ResConnEdge --> EdgeUpdateOutput : h_e_updated
+    ' component "Updated Bond State (h_e_updated)" as EdgeUpdateOutput
+
+    package "Node Update" {
+        component "Message Generation" as MsgGen
+        note right of MsgGen : message = h_e_updated * h_v[src]
+        component "Message Aggregation (Sum)" as MsgAgg
+        component "Node MLP" as NodeMLP
+        component "Residual Connection (Node)" as ResConnNode
+        note right of ResConnNode : h_v_new = h_v + MLP(aggregated_msg)
+    }
+
+    EdgeUpdateOutput --> MsgGen : h_e_updated
+    BN_HV --> MsgGen : h_v[src]
+
+    MsgGen --> MsgAgg
+    MsgAgg --> NodeMLP
+    NodeMLP --> ResConnNode
+    ResConnNode --> OutputStates : h_v_updated
+
+    ' component "Output Atom State (h_v_updated)" as OutputStates
+    ' component "Output Bond State (h_e_updated)" as OutputBondStateFinal // same as EdgeUpdateOutput
+
+    OutputBondStateFinal -[hidden]-> OutputStates : (from same layer)
+}
+
+@enduml

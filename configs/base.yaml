@@ -1,0 +1,26 @@
+data:
+  data_paths:
+    - examples/test_data.csv.gz
+  vocab_path: etc/preprocessor.json
+  dataset_dir: temp_dataset
+  target_columns:
+    - bde
+  test_size: 0.1
+  val_size: 0.1
+  random_seed: 42
+  sample_percentage: 1.0
+  featurizer_type: TokenFeaturizer
+
+model:
+  atom_features: 128
+  num_messages: 6
+  num_tasks: 1
+
+train:
+  device: cuda
+  epochs: 100
+  lr: 0.001
+  batch_size: 64
+  model_save_path: bde_model.pt
+  output_dir: training_runs
+  early_stopping_patience: 10

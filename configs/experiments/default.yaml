@@ -3,6 +3,7 @@ _base_: ../base.yaml
 data:
   data_paths:
     - examples/test_data.csv.gz
+  sample_percentage: 0.1
 
 train:
   device: cuda

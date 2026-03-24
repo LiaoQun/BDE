@@ -114,7 +114,8 @@ def plot_parity(
     fig.suptitle("Parity Plot — All Tasks", fontsize=15, y=1.01)
 
     # Vertical anchors for the two stats boxes (train above, test below)
-    _BOX_YPOS = {"train": 0.97, "test": 0.68}
+    _BOX_XPOS = {"train": 0.04, "test": 0.3}
+    _FIXED_YPOS = 0.97
 
     for col_idx, task in enumerate(task_names):
         ax = axes[0][col_idx]
@@ -141,9 +142,9 @@ def plot_parity(
             stats = _compute_stats(y_true, y_pred)
             stats_str = (
                 f"{style['label']}\n"
+                f"  R²  : {stats['R²']:.3f}\n"
                 f"  MAE : {stats['MAE']:.2f}\n"
-                f"  RMSE: {stats['RMSE']:.2f}\n"
-                f"  R²  : {stats['R²']:.3f}"
+                f"  RMSE: {stats['RMSE']:.2f}"
             )
             props = dict(
                 boxstyle="round,pad=0.4",
@@ -152,11 +153,12 @@ def plot_parity(
                 alpha=0.88,
             )
             ax.text(
-                0.04, _BOX_YPOS[split],
+                _BOX_XPOS[split], _FIXED_YPOS,
                 stats_str,
                 transform=ax.transAxes,
                 fontsize=9,
                 verticalalignment="top",
+                horizontalalignment="left",
                 color=style["color"],
                 bbox=props,
             )

@@ -4,8 +4,10 @@ End-to-end integration test covering the full pipeline:
 Uses a minimal subset of data and epochs to keep runtime short.
 """
 import os
+import shutil
 import pytest
 import pandas as pd
+from datetime import datetime
 
 from src.config.schema import MainConfig, DataConfig, ModelConfig, TrainConfig
 from src.config.loader import save_flattened_config
@@ -34,7 +36,6 @@ def minimal_config(tmp_path):
             num_tasks=1,
         ),
         train=TrainConfig(
-            device="cpu",
             epochs=3,
             lr=0.001,
             batch_size=16,
@@ -51,8 +52,6 @@ def test_training_produces_expected_artifacts(minimal_config, tmp_path):
     Runs a full training loop and checks that all expected output files
     are created in the run directory.
     """
-    from train import run_training
-
     run_dir = _run_training(minimal_config, tmp_path)
 
     # 確認所有預期產出物都存在
@@ -63,6 +62,9 @@ def test_training_produces_expected_artifacts(minimal_config, tmp_path):
         "training_log.csv",
         "training_curve.png",
         "vocab.json",
+        "parity_plot_all.png",
+        "predictions_train.csv",
+        "predictions_test.csv",
     ]
     for filename in expected_files:
         filepath = os.path.join(run_dir, filename)
@@ -120,7 +122,7 @@ def test_prediction_runs_after_training(minimal_config, tmp_path):
         model_path=os.path.join(run_dir, cfg.train.model_save_path),
         vocab_path=os.path.join(run_dir, "vocab.json"),
         featurizer_type=cfg.data.featurizer_type,
-        atom_features=cfg.model.atom_features,  # 這行是新增的
+        atom_features=cfg.model.atom_features,
         num_messages=cfg.model.num_messages,
         num_tasks=cfg.model.num_tasks,
         target_columns=cfg.data.target_columns,
@@ -137,32 +139,57 @@ def test_prediction_runs_after_training(minimal_config, tmp_path):
     assert results_df["bde_pred"].apply(lambda x: abs(x) < 1000).all()
 
 
+def test_predictions_csv_has_expected_columns(minimal_config, tmp_path):
+    """
+    Checks that the predictions_test.csv produced by evaluate()
+    contains the expected ground-truth and prediction columns.
+    """
+    run_dir = _run_training(minimal_config, tmp_path)
+
+    pred_path = os.path.join(run_dir, "predictions_test.csv")
+    df = pd.read_csv(pred_path)
+
+    assert "molecule" in df.columns
+    assert "bond_index" in df.columns
+    assert "bde_pred" in df.columns
+    assert "bde" in df.columns          # ground-truth 欄位
+    assert not df.empty
+
+
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 
 _run_dir_cache: dict = {}
+
+
 def _run_training(cfg: MainConfig, tmp_path) -> str:
     """
     Runs training once per tmp_path and caches the run_dir,
     so multiple tests sharing the same fixture don't re-train.
+
+    Mirrors the logic of ``train.main()``:
+    1. Creates a timestamped run_dir under cfg.train.output_dir.
+    2. Saves the flattened config.yaml into run_dir.
+    3. Calls ``run_training(cfg, run_dir)`` directly.
+    4. Cleans up the temporary dataset directory afterward.
     """
     cache_key = str(tmp_path)
     if cache_key in _run_dir_cache:
         return _run_dir_cache[cache_key]
 
-    import shutil
     from train import run_training
 
-    dummy_config_path = str(tmp_path / "dummy_config.yaml")
-    save_flattened_config(cfg, str(tmp_path))
-    os.rename(
-        os.path.join(str(tmp_path), "config.yaml"),
-        dummy_config_path,
-    )
+    # 建立與 main() 相同結構的 run_dir
+    run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    run_dir = os.path.join(cfg.train.output_dir, run_timestamp)
+    os.makedirs(run_dir, exist_ok=True)
 
-    # 直接用回傳值，不再靠猜測最新目錄
-    run_dir = run_training(cfg, dummy_config_path)
+    # 在 run_dir 內儲存 config.yaml（與 main() 行為一致）
+    save_flattened_config(cfg, run_dir)
+
+    # 執行訓練；run_training 不再負責建立 run_dir
+    run_training(cfg, run_dir)
 
     _run_dir_cache[cache_key] = run_dir
 

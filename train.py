@@ -31,19 +31,14 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__) # Get a logger for this module
 
 
-def run_training(cfg: MainConfig, config_path: str):
+def run_training(cfg: MainConfig, run_dir: str):
     """
     Main function to set up and run the training and evaluation pipeline.
     """
     # 1. Setup
     torch.manual_seed(cfg.data.random_seed)
-    device = torch.device(cfg.train.device if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Using device: {device}")
-
-    # Create a unique directory for this run
-    run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    run_dir = os.path.join(cfg.train.output_dir, run_timestamp)
-    os.makedirs(run_dir, exist_ok=True)
     
     # Add FileHandler to save logs in the run directory
     fh = logging.FileHandler(os.path.join(run_dir, "training.log"))
@@ -52,9 +47,6 @@ def run_training(cfg: MainConfig, config_path: str):
 
     logger.info(f"Saving all artifacts to: {run_dir}")
 
-    # Save the config file for this run for reproducibility
-    save_flattened_config(cfg, run_dir)
-    logger.info(f"Saved configuration to {run_dir}")
     
     # 2. Load, Merge, and Clean Data
     df = load_and_merge_data(
@@ -147,8 +139,17 @@ def main():
 
     cfg: MainConfig = load_config(config_path)
 
+    # Create a unique directory for this run
+    run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    run_dir = os.path.join(cfg.train.output_dir, run_timestamp)
+    os.makedirs(run_dir, exist_ok=True)
+    
+    # Save the config file for this run for reproducibility
+    save_flattened_config(cfg, run_dir)
+    logger.info(f"Saved configuration to {run_dir}")
+
     try:
-        run_training(cfg, config_path)
+        run_training(cfg, run_dir)
     finally:
         if os.path.exists(cfg.data.dataset_dir):
             logger.info(f"Cleaning up temporary dataset directory: {cfg.data.dataset_dir}")

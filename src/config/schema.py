@@ -27,7 +27,7 @@ class ModelConfig:
 @dataclass
 class TrainConfig:
     """Configuration for the training process."""
-    device: str = 'cuda'
+    # device: str = 'cuda'
     epochs: int = 100
     lr: float = 1e-3
     batch_size: int = 64

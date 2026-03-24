@@ -117,3 +117,7 @@ training_runs/
 .gemini/
 .github/
 gha-creds-*.json
+
+#Retain test data
+examples/*
+!examples/test_data.csv.gz

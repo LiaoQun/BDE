@@ -1,7 +1,7 @@
 "Main script for training and evaluating the BDE Prediction Model."
 import os
 import shutil
-import argparse
+import sys
 import json
 from datetime import datetime
 import pandas as pd
@@ -142,19 +142,13 @@ def run_training(cfg: MainConfig, config_path: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train BDE Prediction Model.")
-    parser.add_argument(
-        "--config_path",
-        type=str,
-        default="configs/experiments/default.yaml",
-        help="Path to the YAML configuration file.",
-    )
-    args = parser.parse_args()
+    config_path: str = sys.argv[1] if len(sys.argv) > 1 else "configs/experiments/default.yaml"
+    logger.info(f"Loading config from: {config_path}")
 
-    cfg: MainConfig= load_config(args.config_path)
+    cfg: MainConfig = load_config(config_path)
 
     try:
-        run_training(cfg, args.config_path)
+        run_training(cfg, config_path)
     finally:
         if os.path.exists(cfg.data.dataset_dir):
             logger.info(f"Cleaning up temporary dataset directory: {cfg.data.dataset_dir}")

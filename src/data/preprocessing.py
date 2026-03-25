@@ -38,7 +38,7 @@ def load_and_merge_data(data_paths: List[str], target_columns: List[str] = ['bde
     if not df_list:
         raise FileNotFoundError("No valid data files could be loaded from the specified paths.")
 
-    logger.info("\nMerging and cleaning data...")
+    logger.info("Merging and cleaning data...")
     merged_df = pd.concat(df_list, ignore_index=True)
     logger.info(f"Total records loaded: {len(merged_df)}")
 

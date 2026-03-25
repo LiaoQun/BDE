@@ -94,7 +94,7 @@ class Trainer:
                 logger.info("\nEarly stopping triggered.")
                 break
 
-        logger.info("\nTraining finished.")
+        logger.info("Training finished.")
 
         history_df = save_training_log(history, self.run_dir)
         plot_training_curve(history_df, self.run_dir)
@@ -144,7 +144,7 @@ class Trainer:
         training.
         """
         logger.info(
-            f"\nLoading best model from {self.model_save_path} for final evaluation..."
+            f"Loading best model from {self.model_save_path} for final evaluation..."
         )
 
         try:
@@ -169,7 +169,7 @@ class Trainer:
         # Only evaluate train and test; skip val
         for split_name in ("train", "test"):
             data_list = self.data_splits.get(split_name, [])
-            logger.info(f"\n--- Predicting on {split_name} set ---")
+            logger.info(f"--- Predicting on {split_name} set ---")
             if not data_list:
                 logger.info(f"{split_name} set is empty. Skipping.")
                 continue

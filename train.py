@@ -22,13 +22,30 @@ from src.data.dataset import BDEDataset
 from src.models.mpnn import BDEModel # Temporarily keep BDEModel
 from src.training.trainer import Trainer
 
-# Configure logging
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    handlers=[
-                        logging.StreamHandler() # Output to console
-                    ])
-logger = logging.getLogger(__name__) # Get a logger for this module
+
+
+def setup_logger(log_dir: str, log_level: int = logging.INFO) -> None:
+    """Configure root logger with a console handler and a file handler.
+
+    Args:
+        log_dir: Directory where ``training.log`` will be saved.
+        log_level: Logging level for all handlers (default: INFO).
+    """
+    _LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    fmt = logging.Formatter(_LOG_FORMAT)
+    root = logging.getLogger()
+    root.setLevel(log_level)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(fmt)
+    root.addHandler(console_handler)
+
+    file_handler = logging.FileHandler(os.path.join(log_dir, "training.log"))
+    file_handler.setFormatter(fmt)
+    root.addHandler(file_handler)
+
+
+logger = logging.getLogger(__name__)
 
 
 def run_training(cfg: MainConfig, run_dir: str):
@@ -39,12 +56,6 @@ def run_training(cfg: MainConfig, run_dir: str):
     torch.manual_seed(cfg.data.random_seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Using device: {device}")
-    
-    # Add FileHandler to save logs in the run directory
-    fh = logging.FileHandler(os.path.join(run_dir, "training.log"))
-    fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-    logging.getLogger().addHandler(fh)
-
     logger.info(f"Saving all artifacts to: {run_dir}")
 
     
@@ -135,7 +146,6 @@ def run_training(cfg: MainConfig, run_dir: str):
 
 def main():
     config_path: str = sys.argv[1] if len(sys.argv) > 1 else "configs/experiments/default.yaml"
-    logger.info(f"Loading config from: {config_path}")
 
     cfg: MainConfig = load_config(config_path)
 
@@ -143,7 +153,11 @@ def main():
     run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     run_dir = os.path.join(cfg.train.output_dir, run_timestamp)
     os.makedirs(run_dir, exist_ok=True)
-    
+
+    # 所有 logging 設定集中在此，console + file 同時設定
+    setup_logger(run_dir)
+    logger.info(f"Loading config from: {config_path}")
+
     # Save the config file for this run for reproducibility
     save_flattened_config(cfg, run_dir)
     logger.info(f"Saved configuration to {run_dir}")

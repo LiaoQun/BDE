@@ -12,6 +12,8 @@ from rdkit import Chem
 from rdkit import RDLogger
 from tqdm import tqdm
 
+
+logger = logging.getLogger(__name__)
 # Suppress RDKit logging to keep the output clean
 RDLogger.DisableLog("rdApp.*")
 
@@ -93,7 +95,7 @@ def _fragment_iterator(input_molecule: Molecule, skip_warnings: bool = False) ->
     """
     mol_stereo = count_stereocenters(input_molecule)
     if (mol_stereo["atom_unassigned"] != 0) or (mol_stereo["bond_unassigned"] != 0):
-        logging.warning(f"Molecule {input_molecule.smiles} has undefined stereochemistry")
+        logger.warning(f"Molecule {input_molecule.smiles} has undefined stereochemistry")
         if skip_warnings:
             return
 
@@ -125,7 +127,7 @@ def _fragment_iterator(input_molecule: Molecule, skip_warnings: bool = False) ->
             # Split fragments and canonicalize by sorting
             frags_smiles_list = sorted(fragmented_smiles.split("."), key=len,reverse=True)
             if len(frags_smiles_list) != 2:
-                logging.warning(f"Fragmentation of {input_molecule.smiles} bond {bond.GetIdx()} did not yield 2 fragments. Got: {frags_smiles_list}")
+                logger.warning(f"Fragmentation of {input_molecule.smiles} bond {bond.GetIdx()} did not yield 2 fragments. Got: {frags_smiles_list}")
                 continue
             
             # Standardize fragment SMILES to be implicit-H for consistency with original
@@ -144,7 +146,7 @@ def _fragment_iterator(input_molecule: Molecule, skip_warnings: bool = False) ->
 
             # Stoichiometry check
             if (count_atom_types(frag1) + count_atom_types(frag2)) != count_atom_types(input_molecule):
-                 logging.error(f"Atom count mismatch for {input_molecule.smiles} -> {frag1.smiles} + {frag2.smiles}")
+                 logger.error(f"Atom count mismatch for {input_molecule.smiles} -> {frag1.smiles} + {frag2.smiles}")
                  continue
 
             yield {
@@ -157,7 +159,7 @@ def _fragment_iterator(input_molecule: Molecule, skip_warnings: bool = False) ->
             }
 
         except Exception as e:
-            logging.error(f"Fragmentation error on {input_molecule.smiles} bond {bond.GetIdx()}: {e}")
+            logger.error(f"Fragmentation error on {input_molecule.smiles} bond {bond.GetIdx()}: {e}")
             continue
 
 
@@ -172,7 +174,7 @@ def generate_fragment_template(smiles_list: List[str]) -> pd.DataFrame:
             # First, canonicalize the input SMILES to ensure consistency
             temp_mol = Chem.MolFromSmiles(smiles)
             if temp_mol is None:
-                logging.error(f"Could not parse SMILES: {smiles}")
+                logger.error(f"Could not parse SMILES: {smiles}")
                 continue
             canonical_smiles = Chem.MolToSmiles(temp_mol, isomericSmiles=True)
             
@@ -184,7 +186,7 @@ def generate_fragment_template(smiles_list: List[str]) -> pd.DataFrame:
                 fragment_data['molecule'] = canonical_smiles
                 records.append(fragment_data)
         except Exception as e:
-            logging.error(f"Failed to process molecule {smiles}: {e}")
+            logger.error(f"Failed to process molecule {smiles}: {e}")
     
     # Add the 'bde' column at the end
     df = pd.DataFrame(records)

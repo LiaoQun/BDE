@@ -14,7 +14,7 @@ data:
 model:
   atom_features: 128
   num_messages: 6
-  num_tasks: 1
+
 
 train:
   device: cuda

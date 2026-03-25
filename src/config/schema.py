@@ -22,7 +22,7 @@ class ModelConfig:
     """Configuration for the BDEModel."""
     atom_features: int = 128
     num_messages: int = 6
-    num_tasks: int = 1
+    num_tasks: int = field(init=False, default=0)  # derived from target_columns; do not set manually
 
 @dataclass
 class TrainConfig:
@@ -41,3 +41,10 @@ class MainConfig:
     data: DataConfig = field(default_factory=DataConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
+
+    def __post_init__(self) -> None:
+        """Enforce cross-field invariants after initialisation.
+
+        Derives ``model.num_tasks`` from ``len(data.target_columns)``.
+        """
+        self.model.num_tasks = len(self.data.target_columns)

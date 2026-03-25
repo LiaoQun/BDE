@@ -69,6 +69,11 @@ def load_config(config_path: str) -> MainConfig:
             for key, value in params.items():
                 if hasattr(config_group, key):
                     setattr(config_group, key, value)
+
+    # Re-run __post_init__ to enforce cross-field invariants (e.g. num_tasks)
+    # after all YAML values have been applied via setattr.
+    cfg.__post_init__()
+
     return cfg
 
 

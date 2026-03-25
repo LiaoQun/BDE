@@ -33,7 +33,6 @@ def minimal_config(tmp_path):
         model=ModelConfig(
             atom_features=32,          # 縮小模型，跑得快
             num_messages=2,
-            num_tasks=1,
         ),
         train=TrainConfig(
             epochs=3,
@@ -178,12 +177,15 @@ def _run_training(cfg: MainConfig, tmp_path) -> str:
     if cache_key in _run_dir_cache:
         return _run_dir_cache[cache_key]
 
-    from train import run_training
+    from train import run_training, setup_logger
 
     # 建立與 main() 相同結構的 run_dir
     run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     run_dir = os.path.join(cfg.train.output_dir, run_timestamp)
     os.makedirs(run_dir, exist_ok=True)
+
+    # 初始化 logger（建立 training.log FileHandler），與 main() 行為一致
+    setup_logger(run_dir)
 
     # 在 run_dir 內儲存 config.yaml（與 main() 行為一致）
     save_flattened_config(cfg, run_dir)

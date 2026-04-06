@@ -7,18 +7,27 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def load_and_merge_data(data_paths: List[str], target_columns: List[str] = ['bde'], sample_percentage: float = 1.0, random_seed: int = 42) -> pd.DataFrame:
+def load_and_merge_data(
+    data_paths: List[str],
+    target_columns: List[str] = ['bde'],
+    random_seed: int = 42,
+) -> pd.DataFrame:
     """
     Loads data from a list of CSV file paths, merges them, canonicalizes SMILES,
     and cleans the data.
     Allows rows with missing values as long as at least one task target is present.
 
+    Supports cross-file multitask scenarios where different files contribute
+    different target columns (e.g., one file has 'bde', another has 'bdfe').
+    Missing target columns are padded with NaN for downstream consistency.
+
     Args:
-        data_paths (List[str]): A list of file paths to the CSV data.
-        target_columns (List[str]): The columns representing predicting tasks.
+        data_paths: Paths to CSV (or .csv.gz) files to load and merge.
+        target_columns: Column names for prediction targets.
+        random_seed: Random seed used for SMILES-deduplication groupby tie-breaking.
 
     Returns:
-        pd.DataFrame: A single, cleaned DataFrame containing all the data.
+        A single cleaned DataFrame with all records across the provided files.
     """
     if not data_paths:
         raise ValueError("No data paths provided in the configuration.")
@@ -47,20 +56,33 @@ def load_and_merge_data(data_paths: List[str], target_columns: List[str] = ['bde
     
     # Must have molecule and bond_index
     merged_df.dropna(subset=['molecule', 'bond_index'], inplace=True)
-    
-    # Must have at least one valid target present for multi-task support
-    merged_df = merged_df.dropna(subset=target_columns, how='all')
-    
+
+    # Must have at least one valid target present for multi-task support.
+    # Crucially: only check columns that ACTUALLY EXIST in this specific file.
+    # In cross-file multitask scenarios, some files may not have all target
+    # columns (e.g., an extra file with 'bdfe' but not 'bde').  Calling
+    # dropna() on a non-existent column raises KeyError in pandas >= 1.3.
+    existing_targets = [col for col in target_columns if col in merged_df.columns]
+    if existing_targets:
+        merged_df = merged_df.dropna(subset=existing_targets, how='all')
+    else:
+        logger.warning(
+            f"None of the target columns {target_columns} found in this dataset. "
+            "All rows will be kept without target filtering."
+        )
+
+    # Pad missing target columns with NaN so that pd.concat() downstream
+    # always produces a DataFrame with a consistent column schema.
+    for col in target_columns:
+        if col not in merged_df.columns:
+            merged_df[col] = float('nan')
+            logger.debug(
+                f"Added placeholder column '{col}' (all NaN) to align schema "
+                "with target_columns."
+            )
+
     if initial_rows > len(merged_df):
         logger.info(f"Dropped {initial_rows - len(merged_df)} rows missing critical key values or containing NO valid targets.")
-
-    if 0 < sample_percentage < 1.0:
-        logger.info(f"Sampling {sample_percentage * 100:.2f}% of unique molecules before canonicalization...")
-        unique_mols = merged_df['molecule'].unique()
-        n_mols = max(1, int(len(unique_mols) * sample_percentage))
-        sampled_mols = pd.Series(unique_mols).sample(n=n_mols, random_state=random_seed)
-        merged_df = merged_df[merged_df['molecule'].isin(sampled_mols)]
-        logger.info(f"Dataset reduced to {len(merged_df['molecule'].unique())} unique molecules and {len(merged_df)} entries for processing.")
 
     # --- Canonicalize SMILES ---
     logger.info("Canonicalizing SMILES strings...")

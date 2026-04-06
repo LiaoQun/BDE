@@ -10,7 +10,7 @@ from src.config.schema import MainConfig, DataConfig, ModelConfig, TrainConfig
 
 def _load_yaml(path: str) -> Dict[str, Any]:
     """Loads a single YAML file."""
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
@@ -88,5 +88,5 @@ def save_flattened_config(cfg: MainConfig, run_dir: str) -> None:
         run_dir (str): The run directory to save the config into.
     """
     output_path = os.path.join(run_dir, "config.yaml")
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         yaml.dump(_config_to_dict(cfg), f, default_flow_style=False, sort_keys=False)

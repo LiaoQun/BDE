@@ -21,12 +21,11 @@ def minimal_config(tmp_path):
     """
     cfg = MainConfig(
         data=DataConfig(
-            data_paths=["examples/test_data.csv.gz"],
+            base_data_paths=["examples/test_data.csv.gz"],  # TODO: full test refactor needed for new pipeline API
             dataset_dir=str(tmp_path / "dataset"),
             test_size=0.1,
             val_size=0.1,
             random_seed=42,
-            sample_percentage=0.02,   # 只用 2% 的資料，跑得快
             featurizer_type="TokenFeaturizer",
             target_columns=["bde"],
         ),

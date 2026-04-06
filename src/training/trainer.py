@@ -4,7 +4,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import logging
 
@@ -31,73 +31,118 @@ class Trainer:
         cfg: TrainConfig,
         model_cfg: ModelConfig,
         run_dir: str,
-        full_dataset_df: pd.DataFrame,
-        data_splits: Dict[str, List],
-        vocab_path: str,
+        full_dataset_df: Optional[pd.DataFrame] = None,
+        data_splits: Optional[Dict[str, List]] = None,
+        vocab_path: str = "",
         featurizer_type: str = 'TokenFeaturizer',
         target_columns: List[str] = None,
+        fold_idx: int = 0,
     ):
         self.model = model
         self.optimizer = optimizer
         self.train_loader = train_loader
-        self.val_loader = val_loader
+        self.val_loader = val_loader  # None means Method-A (no validation)
         self.test_loader = test_loader
         self.device = device
         self.cfg = cfg
         self.model_cfg = model_cfg
         self.run_dir = run_dir
-        self.model_save_path = os.path.join(run_dir, cfg.model_save_path)
+        self.fold_idx = fold_idx
+        # Include fold index in the checkpoint filename so each fold's model
+        # is saved independently and can be loaded for ensemble inference.
+        stem, ext = os.path.splitext(cfg.model_save_path)
+        fold_filename = f"{stem}_fold_{fold_idx}{ext}"
+        self.model_save_path = os.path.join(run_dir, fold_filename)
         self.vocab_path = vocab_path
         self.featurizer_type = featurizer_type
         self.full_dataset_df = full_dataset_df
         self.data_splits = data_splits
         self.target_columns = target_columns if target_columns is not None else ['bde']
 
-    def train(self):
+    def train(self) -> None:
         """
         Executes the main training loop, including validation and early stopping.
+
+        Behaviour depends on whether ``val_loader`` was provided:
+
+        - **With val_loader** (Method-B / K-Fold): validates each epoch,
+          saves the best model (lowest val loss), and applies early stopping.
+        - **Without val_loader** (Method-A, ``cv='all'`` + ``val_size=0``):
+          trains for exactly ``cfg.epochs`` epochs with no validation step.
+          The model is saved after the **last** epoch.
         """
-        logger.info("Starting training...")
-        best_val_loss = float('inf')
-        patience_counter = 0
-        history = []
+        fold_tag = f"[Fold {self.fold_idx}] " if self.fold_idx > 0 else ""
 
-        for epoch in range(1, self.cfg.epochs + 1):
-            avg_train_loss = self._train_epoch(epoch)
-            avg_val_loss = self._validate_epoch(epoch)
-
+        if self.val_loader is None:
+            # ── Method-A: no validation, fixed epoch count ────────────────────
             logger.info(
-                f"Epoch {epoch:03d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}"
+                f"{fold_tag}Starting training (Method-A: no validation, "
+                f"{self.cfg.epochs} epochs)..."
             )
-            history.append({
-                'epoch': epoch,
-                'train_loss': avg_train_loss,
-                'val_loss': avg_val_loss,
-            })
-
-            if avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
-                torch.save(self.model.state_dict(), self.model_save_path)
+            history = []
+            for epoch in range(1, self.cfg.epochs + 1):
+                avg_train_loss = self._train_epoch(epoch)
                 logger.info(
-                    f"  -> New best validation loss: {best_val_loss:.4f}. "
-                    f"Model saved to {self.model_save_path}"
+                    f"{fold_tag}Epoch {epoch:03d} | Train Loss: {avg_train_loss:.4f}"
                 )
-                patience_counter = 0
-            else:
-                patience_counter += 1
+                history.append({'epoch': epoch, 'train_loss': avg_train_loss, 'val_loss': None})
+
+            # Save the final model (no best-val checkpoint concept here)
+            torch.save(self.model.state_dict(), self.model_save_path)
+            logger.info(
+                f"{fold_tag}Training finished. Final model saved to {self.model_save_path}"
+            )
+
+        else:
+            # ── Method-B / K-Fold: validate each epoch, early stopping ────────
+            logger.info(f"{fold_tag}Starting training with validation...")
+            best_val_loss = float('inf')
+            patience_counter = 0
+            history = []
+
+            for epoch in range(1, self.cfg.epochs + 1):
+                avg_train_loss = self._train_epoch(epoch)
+                avg_val_loss = self._validate_epoch(epoch)
+
                 logger.info(
-                    f"  -> Validation loss did not improve. "
-                    f"Patience: {patience_counter}/{self.cfg.early_stopping_patience}"
+                    f"{fold_tag}Epoch {epoch:03d} | "
+                    f"Train Loss: {avg_train_loss:.4f} | "
+                    f"Val Loss: {avg_val_loss:.4f}"
                 )
+                history.append({
+                    'epoch': epoch,
+                    'train_loss': avg_train_loss,
+                    'val_loss': avg_val_loss,
+                })
 
-            if patience_counter >= self.cfg.early_stopping_patience:
-                logger.info("\nEarly stopping triggered.")
-                break
+                if avg_val_loss < best_val_loss:
+                    best_val_loss = avg_val_loss
+                    torch.save(self.model.state_dict(), self.model_save_path)
+                    logger.info(
+                        f"{fold_tag}  -> New best val loss: {best_val_loss:.4f}. "
+                        f"Model saved to {self.model_save_path}"
+                    )
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    logger.info(
+                        f"{fold_tag}  -> Val loss did not improve. "
+                        f"Patience: {patience_counter}/{self.cfg.early_stopping_patience}"
+                    )
 
-        logger.info("Training finished.")
+                if patience_counter >= self.cfg.early_stopping_patience:
+                    logger.info(f"{fold_tag}\nEarly stopping triggered.")
+                    break
 
-        history_df = save_training_log(history, self.run_dir)
-        plot_training_curve(history_df, self.run_dir)
+            logger.info(f"{fold_tag}Training finished.")
+
+        history_df = save_training_log(
+            [h for h in history if h.get('val_loss') is not None],
+            self.run_dir,
+            suffix=f"_fold_{self.fold_idx}",
+        )
+        if history_df is not None and not history_df.empty:
+            plot_training_curve(history_df, self.run_dir, suffix=f"_fold_{self.fold_idx}")
 
     def _train_epoch(self, epoch: int) -> float:
         """Handles the training logic for a single epoch."""

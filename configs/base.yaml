@@ -1,23 +1,21 @@
 data:
-  data_paths:
+  base_data_paths:
     - examples/test_data.csv.gz
-  vocab_path: etc/preprocessor.json
+  extra_data_paths: []
+  cross_validation: none        # 'none' | 'leave_one_out' | int (K-Fold)
+  # vocab_path: etc/preprocessor.json
   dataset_dir: temp_dataset
   target_columns:
     - bde
-  test_size: 0.1
-  val_size: 0.1
+  val_size: 0.1                 # inner split ratio; 0.0 = Method-A (no early stopping)
   random_seed: 42
-  sample_percentage: 1.0
-  featurizer_type: TokenFeaturizer
+  featurizer_type: ChemPropFeaturizer
 
 model:
   atom_features: 128
   num_messages: 6
 
-
 train:
-  device: cuda
   epochs: 100
   lr: 0.001
   batch_size: 64

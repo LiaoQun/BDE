@@ -1,0 +1,33 @@
+_base_: ../base.yaml
+
+# ── Nested CV + Ensemble example ─────────────────────────────────────────────
+#
+# Outer loop (cv_param):
+#   'none'           → no CV (single training run)
+#   'leave_one_out'  → LOO on extra molecules (expensive for large sets)
+#   int (e.g. 3)     → K-Fold on extra molecules
+#
+# Inner loop (val_size):
+#   0.0              → Method-A — no early stopping, train full epochs
+#   0.1              → Method-B — 10% of broad_train held out for validation
+#
+# Ensemble: after all folds, every fold model predicts on ALL extra_data.
+#   → ensemble_predictions.csv  (pred_mean + pred_std per bond)
+#   → parity_ensemble.png       (errorbar parity plot)
+#
+# Per-fold evaluation: each model predicts on its own sealed outer_test.
+#   → fold_metrics.csv          (R², MAE, RMSE per fold)
+
+data:
+  base_data_paths:
+    - examples/test_data.csv.gz
+  extra_data_paths:      # add extra CSV paths here when available
+    - examples/test_db2_bdfe.csv
+  target_columns:
+    - bde
+    - bdfe
+  cross_validation: 3         # 3-Fold outer CV
+
+train:
+  epochs: 10
+  early_stopping_patience: 5

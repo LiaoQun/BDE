@@ -1,22 +1,27 @@
 import os
 import json
 import pandas as pd
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
 
-def save_training_log(history: List[Dict[str, Any]], output_dir: str) -> pd.DataFrame:
-    """
-    Saves the training history to a CSV file.
+def save_training_log(
+    history: List[Dict[str, Any]],
+    output_dir: str,
+    suffix: str = "",
+) -> Optional[pd.DataFrame]:
+    """Saves the training history to a CSV file.
 
     Args:
-        history (List[Dict[str, Any]]): A list of dictionaries, where each dict
-                                        represents an epoch's metrics.
-        output_dir (str): The directory to save the log file in.
-    
+        history: A list of dicts representing per-epoch metrics.
+        output_dir: The directory to save the log file in.
+        suffix: Optional filename suffix (e.g. ``'_fold_0'``).
+
     Returns:
-        pd.DataFrame: The history converted to a DataFrame.
+        The history as a DataFrame, or ``None`` if *history* is empty.
     """
+    if not history:
+        return None
     history_df = pd.DataFrame(history)
-    log_path = os.path.join(output_dir, 'training_log.csv')
+    log_path = os.path.join(output_dir, f'training_log{suffix}.csv')
     history_df.to_csv(log_path, index=False)
     print(f"Training log saved to {log_path}")
     return history_df

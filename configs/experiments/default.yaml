@@ -1,10 +1,11 @@
 _base_: ../base.yaml
 
+# Default experiment: no CV, Method-B (val_size=0.1 used for early stopping).
 data:
-  data_paths:
+  base_data_paths:
     - examples/test_data.csv.gz
-  sample_percentage: 0.1
+  cross_validation: none
+  val_size: 0.1
 
 train:
-  device: cuda
-  epochs: 2
+  epochs: 5

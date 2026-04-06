@@ -54,11 +54,11 @@ def test_training_produces_expected_artifacts(minimal_config, tmp_path):
 
     # 確認所有預期產出物都存在
     expected_files = [
-        "bde_model_fold_0.pt",
+        "bde_model.pt",
         "config.yaml",
         "training.log",
-        "training_log_fold_0.csv",
-        "training_curve_fold_0.png",
+        "training_log.csv",
+        "training_curve.png",
         "vocab.json",
         "parity_ensemble.png",
         "ensemble_predictions.csv",
@@ -75,7 +75,7 @@ def test_training_log_has_correct_columns(minimal_config, tmp_path):
     """
     run_dir = _run_training(minimal_config, tmp_path)
 
-    log_path = os.path.join(run_dir, "training_log_fold_0.csv")
+    log_path = os.path.join(run_dir, "training_log.csv")
     df = pd.read_csv(log_path)
 
     assert "epoch" in df.columns
@@ -116,7 +116,7 @@ def test_prediction_runs_after_training(minimal_config, tmp_path):
 
     results_df = get_bde_predictions(
         smiles=["CCO", "CCC"],
-        model_path=os.path.join(run_dir, cfg.train.model_save_path.replace(".pt", "_fold_0.pt")),
+        model_path=os.path.join(run_dir, cfg.train.model_save_path),
         vocab_path=os.path.join(run_dir, "vocab.json"),
         featurizer_type=cfg.data.featurizer_type,
         atom_features=cfg.model.atom_features,

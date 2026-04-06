@@ -203,8 +203,17 @@ def run_cv_loop(
         random_seed=cfg.data.random_seed,
     )
 
+    is_cv = str(cfg.data.cross_validation).lower() != 'none'
+
     for broad_train, outer_test, fold_idx in cv_gen:
         fold_tag = f"fold_{fold_idx}"
+
+        if is_cv:
+            fold_run_dir = os.path.join(run_dir, fold_tag)
+            os.makedirs(fold_run_dir, exist_ok=True)
+        else:
+            fold_run_dir = run_dir
+
         logger.info(
             "\n%s\n  FOLD %d  |  broad_train: %d entries  |  outer_test: %d entries\n%s",
             "=" * 62, fold_idx, len(broad_train), len(outer_test), "=" * 62,
@@ -256,7 +265,7 @@ def run_cv_loop(
             device=device,
             cfg=cfg.train,
             model_cfg=cfg.model,
-            run_dir=run_dir,
+            run_dir=fold_run_dir,
             full_dataset_df=None,        # Not needed here
             data_splits={},              # Not needed here
             vocab_path="",               # Not needed here

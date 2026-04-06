@@ -1,6 +1,8 @@
 _base_: ../base.yaml
 
 data:
+  base_data_paths:
+    - examples/test_data_db2_1000.csv
   featurizer_type: ChemPropFeaturizer
 
 model:

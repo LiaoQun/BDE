@@ -48,11 +48,8 @@ class Trainer:
         self.model_cfg = model_cfg
         self.run_dir = run_dir
         self.fold_idx = fold_idx
-        # Include fold index in the checkpoint filename so each fold's model
-        # is saved independently and can be loaded for ensemble inference.
-        stem, ext = os.path.splitext(cfg.model_save_path)
-        fold_filename = f"{stem}_fold_{fold_idx}{ext}"
-        self.model_save_path = os.path.join(run_dir, fold_filename)
+        # Since cv_runner.py manages fold-specific directories, we don't need fold_idx in the filename
+        self.model_save_path = os.path.join(run_dir, cfg.model_save_path)
         self.vocab_path = vocab_path
         self.featurizer_type = featurizer_type
         self.full_dataset_df = full_dataset_df
@@ -139,10 +136,10 @@ class Trainer:
         history_df = save_training_log(
             [h for h in history if h.get('val_loss') is not None],
             self.run_dir,
-            suffix=f"_fold_{self.fold_idx}",
+            suffix="",
         )
         if history_df is not None and not history_df.empty:
-            plot_training_curve(history_df, self.run_dir, suffix=f"_fold_{self.fold_idx}")
+            plot_training_curve(history_df, self.run_dir, suffix="")
 
     def _train_epoch(self, epoch: int) -> float:
         """Handles the training logic for a single epoch."""

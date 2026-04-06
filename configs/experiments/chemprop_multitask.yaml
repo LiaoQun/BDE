@@ -14,6 +14,5 @@ model:
   num_messages: 3
 
 train:
-  device: cpu
   epochs: 5
   batch_size: 32

@@ -54,15 +54,14 @@ def test_training_produces_expected_artifacts(minimal_config, tmp_path):
 
     # 確認所有預期產出物都存在
     expected_files = [
-        "bde_model.pt",
+        "bde_model_fold_0.pt",
         "config.yaml",
         "training.log",
-        "training_log.csv",
-        "training_curve.png",
+        "training_log_fold_0.csv",
+        "training_curve_fold_0.png",
         "vocab.json",
-        "parity_plot_all.png",
-        "predictions_train.csv",
-        "predictions_test.csv",
+        "parity_ensemble.png",
+        "ensemble_predictions.csv",
     ]
     for filename in expected_files:
         filepath = os.path.join(run_dir, filename)
@@ -76,7 +75,7 @@ def test_training_log_has_correct_columns(minimal_config, tmp_path):
     """
     run_dir = _run_training(minimal_config, tmp_path)
 
-    log_path = os.path.join(run_dir, "training_log.csv")
+    log_path = os.path.join(run_dir, "training_log_fold_0.csv")
     df = pd.read_csv(log_path)
 
     assert "epoch" in df.columns
@@ -117,7 +116,7 @@ def test_prediction_runs_after_training(minimal_config, tmp_path):
 
     results_df = get_bde_predictions(
         smiles=["CCO", "CCC"],
-        model_path=os.path.join(run_dir, cfg.train.model_save_path),
+        model_path=os.path.join(run_dir, cfg.train.model_save_path.replace(".pt", "_fold_0.pt")),
         vocab_path=os.path.join(run_dir, "vocab.json"),
         featurizer_type=cfg.data.featurizer_type,
         atom_features=cfg.model.atom_features,
@@ -139,17 +138,17 @@ def test_prediction_runs_after_training(minimal_config, tmp_path):
 
 def test_predictions_csv_has_expected_columns(minimal_config, tmp_path):
     """
-    Checks that the predictions_test.csv produced by evaluate()
+    Checks that the ensemble_predictions.csv produced by evaluate()
     contains the expected ground-truth and prediction columns.
     """
     run_dir = _run_training(minimal_config, tmp_path)
 
-    pred_path = os.path.join(run_dir, "predictions_test.csv")
+    pred_path = os.path.join(run_dir, "ensemble_predictions.csv")
     df = pd.read_csv(pred_path)
 
     assert "molecule" in df.columns
     assert "bond_index" in df.columns
-    assert "bde_pred" in df.columns
+    assert "bde_pred_mean" in df.columns
     assert "bde" in df.columns          # ground-truth 欄位
     assert not df.empty
 

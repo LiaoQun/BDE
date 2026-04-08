@@ -41,43 +41,39 @@ class DataConfig:
             ``'ChemPropFeaturizer'``.
     """
 
-    base_data_paths: List[str] = field(
-        default_factory=lambda: ['examples/test_data.csv.gz']
-    )
-    extra_data_paths: List[str] = field(default_factory=list)
-    cross_validation: Union[str, int] = 'none'
-    vocab_path: str = 'etc/preprocessor.json'
-    dataset_dir: str = 'temp_dataset'
-    target_columns: List[str] = field(default_factory=lambda: ['bde'])
-    test_size: float = 0.1
-    val_size: float = 0.1
-    random_seed: int = 42
-    featurizer_type: Optional[str] = None  # Options: 'TokenFeaturizer', 'ChemPropFeaturizer'
+    base_data_paths: List[str]
+    extra_data_paths: List[str]
+    cross_validation: Union[str, int]
+    dataset_dir: str
+    target_columns: List[str]
+    test_size: float
+    val_size: float
+    random_seed: int
+    featurizer_type: Optional[str]
 
 @dataclass
 class ModelConfig:
     """Configuration for the BDEModel."""
-    atom_features: int = 128
-    num_messages: int = 6
-    num_tasks: int = field(init=False, default=0)  # derived from target_columns; do not set manually
+    atom_features: int
+    num_messages: int
+    num_tasks: int = field(init=False)  # derived from target_columns; do not set manually
 
 @dataclass
 class TrainConfig:
     """Configuration for the training process."""
-    # device: str = 'cuda'
-    epochs: int = 100
-    lr: float = 1e-3
-    batch_size: int = 64
-    model_save_path: str = 'bde_model.pt'
-    output_dir: str = 'training_runs'
-    early_stopping_patience: int = 10
+    epochs: int
+    lr: float
+    batch_size: int
+    model_save_path: str
+    output_dir: str
+    early_stopping_patience: int
     
 @dataclass
 class MainConfig:
     """Main configuration holding all sub-configurations."""
-    data: DataConfig = field(default_factory=DataConfig)
-    model: ModelConfig = field(default_factory=ModelConfig)
-    train: TrainConfig = field(default_factory=TrainConfig)
+    data: DataConfig
+    model: ModelConfig
+    train: TrainConfig
 
     def __post_init__(self) -> None:
         """Enforce cross-field invariants after initialisation.

@@ -19,8 +19,6 @@ _base_: ../base.yaml
 #   → fold_metrics.csv          (R², MAE, RMSE per fold)
 
 data:
-  base_data_paths:
-    - examples/test_data.csv.gz
   extra_data_paths:      # add extra CSV paths here when available
     - examples/test_db2_bdfe.csv
   target_columns:
@@ -29,5 +27,4 @@ data:
   cross_validation: 3         # 3-Fold outer CV
 
 train:
-  epochs: 5
   early_stopping_patience: 5

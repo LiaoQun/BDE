@@ -22,11 +22,13 @@ def minimal_config(tmp_path):
     cfg = MainConfig(
         data=DataConfig(
             base_data_paths=["examples/test_data.csv.gz"],  # TODO: full test refactor needed for new pipeline API
+            extra_data_paths=[],
+            cross_validation="none",
             dataset_dir=str(tmp_path / "dataset"),
             test_size=0.1,
             val_size=0.1,
             random_seed=42,
-            featurizer_type="TokenFeaturizer",
+            featurizer_type="ChemPropFeaturizer",
             target_columns=["bde"],
         ),
         model=ModelConfig(
@@ -36,7 +38,7 @@ def minimal_config(tmp_path):
         train=TrainConfig(
             epochs=3,
             lr=0.001,
-            batch_size=16,
+            batch_size=128,
             model_save_path="bde_model.pt",
             output_dir=str(tmp_path / "training_runs"),
             early_stopping_patience=10,

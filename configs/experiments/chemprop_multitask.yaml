@@ -1,18 +1,13 @@
 _base_: ../base.yaml
 
 data:
-  base_data_paths:
-    - examples/test_data_db2_1000.csv
-  featurizer_type: ChemPropFeaturizer
   target_columns:
     - bde
     - bdfe
     - bdscfe
 
 model:
-  atom_features: 128
   num_messages: 3
 
 train:
-  epochs: 5
   batch_size: 32

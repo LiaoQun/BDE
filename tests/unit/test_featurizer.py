@@ -166,12 +166,20 @@ def test_tokenizer_save_and_load():
 def data_config_token(sample_vocab_file):
     """Provides a DataConfig for TokenFeaturizer."""
     # Ensure vocab_path is accessible
-    return DataConfig(featurizer_type="TokenFeaturizer", vocab_path=sample_vocab_file)
+    return DataConfig(
+        base_data_paths=[], extra_data_paths=[], cross_validation="none",
+        dataset_dir="dummy", target_columns=["bde"],
+        test_size=0.1, val_size=0.1, random_seed=42, featurizer_type="TokenFeaturizer"
+    )
 
 @pytest.fixture
 def data_config_chemprop():
     """Provides a DataConfig for ChemPropFeaturizer."""
-    return DataConfig(featurizer_type="ChemPropFeaturizer")
+    return DataConfig(
+        base_data_paths=[], extra_data_paths=[], cross_validation="none",
+        dataset_dir="dummy", target_columns=["bde"],
+        test_size=0.1, val_size=0.1, random_seed=42, featurizer_type="ChemPropFeaturizer"
+    )
 
 def test_token_featurizer_properties(sample_vocab_file):
     """Tests properties of TokenFeaturizer."""

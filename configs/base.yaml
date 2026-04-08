@@ -3,10 +3,10 @@ data:
     - examples/test_data.csv.gz
   extra_data_paths: []
   cross_validation: none        # 'none' | 'leave_one_out' | int (K-Fold)
-  # vocab_path: etc/preprocessor.json
   dataset_dir: temp_dataset
   target_columns:
     - bde
+  test_size: 0.1                # Reserved for future use
   val_size: 0.1                 # inner split ratio; 0.0 = Method-A (no early stopping)
   random_seed: 42
   featurizer_type: ChemPropFeaturizer
@@ -16,7 +16,7 @@ model:
   num_messages: 6
 
 train:
-  epochs: 100
+  epochs: 10
   lr: 0.001
   batch_size: 64
   model_save_path: bde_model.pt

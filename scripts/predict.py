@@ -63,12 +63,12 @@ def main():
         featurizer_type = cfg.data.featurizer_type
         num_messages = cfg.model.num_messages
 
-        # Determine vocab path: prefer run-specific, fallback to config
+        # Determine vocab path: always run-specific
         run_vocab_path = os.path.join(args.run_dir, 'vocab.json')
         if os.path.exists(run_vocab_path):
             vocab_path = run_vocab_path
         else:
-            vocab_path = cfg.get('data', {}).get('vocab_path', 'etc/preprocessor.json')
+            raise FileNotFoundError(f"vocab.json not found in {args.run_dir}")
             
         # Determine featurizer type from config if not explicitly provided
         if args.featurizer_type is None:

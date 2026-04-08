@@ -61,17 +61,17 @@ def load_config(config_path: str) -> MainConfig:
         base_raw = _load_yaml(base_path)
         raw = _deep_merge(base_raw, raw)
 
-    # Populate dataclasses
-    cfg = MainConfig()
-    for group, params in raw.items():
-        if hasattr(cfg, group) and isinstance(params, dict):
-            config_group = getattr(cfg, group)
-            for key, value in params.items():
-                if hasattr(config_group, key):
-                    setattr(config_group, key, value)
+    # Populate dataclasses dynamically
+    try:
+        data_cfg = DataConfig(**raw.get("data", {}))
+        model_cfg = ModelConfig(**raw.get("model", {}))
+        train_cfg = TrainConfig(**raw.get("train", {}))
+    except TypeError as e:
+        raise ValueError(f"Configuration error: {e}. Please check your yaml file against the schema.") from e
+
+    cfg = MainConfig(data=data_cfg, model=model_cfg, train=train_cfg)
 
     # Re-run __post_init__ to enforce cross-field invariants (e.g. num_tasks)
-    # after all YAML values have been applied via setattr.
     cfg.__post_init__()
 
     return cfg

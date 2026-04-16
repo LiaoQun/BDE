@@ -16,7 +16,8 @@ logic itself.
 import logging
 import os
 from typing import Optional
-
+import random
+import numpy as np
 import pandas as pd
 import torch
 
@@ -28,6 +29,16 @@ from src.training.ensemble import run_ensemble_prediction
 
 logger = logging.getLogger(__name__)
 
+def set_seed(seed: int):
+    """固定所有亂數種子以確保實驗可重現。"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)  # 若有多張 GPU
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 def run_training(cfg: MainConfig, run_dir: str) -> Optional[str]:
     """Orchestrate the full CV training and ensemble evaluation pipeline.
@@ -50,7 +61,7 @@ def run_training(cfg: MainConfig, run_dir: str) -> Optional[str]:
         *run_dir* on successful completion, or ``None`` if the pipeline
         aborts early due to missing data or misconfiguration.
     """
-    torch.manual_seed(cfg.data.random_seed)
+    set_seed(cfg.data.random_seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device: %s", device)
     logger.info("Run directory: %s", run_dir)

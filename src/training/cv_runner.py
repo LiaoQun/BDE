@@ -203,16 +203,13 @@ def run_cv_loop(
         random_seed=cfg.data.random_seed,
     )
 
-    is_cv = str(cfg.data.cross_validation).lower() != 'none'
-
     for broad_train, outer_test, fold_idx in cv_gen:
         fold_tag = f"fold_{fold_idx}"
-
-        if is_cv:
-            fold_run_dir = os.path.join(run_dir, fold_tag)
-            os.makedirs(fold_run_dir, exist_ok=True)
-        else:
-            fold_run_dir = run_dir
+        # Always create a fold_N/ subdirectory, regardless of cv strategy.
+        # This ensures a uniform run_dir layout for both cv='none' and K-Fold,
+        # making FoldResult.model_path predictable and Predictor maintenance simpler.
+        fold_run_dir = os.path.join(run_dir, fold_tag)
+        os.makedirs(fold_run_dir, exist_ok=True)
 
         logger.info(
             "\n%s\n  FOLD %d  |  broad_train: %d entries  |  outer_test: %d entries\n%s",

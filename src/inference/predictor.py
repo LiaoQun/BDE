@@ -1,6 +1,7 @@
 """
 This module contains the Predictor class for running inference with a trained BDE model.
 """
+from glob import glob
 import os
 import logging # Import logging
 from typing import List, Dict, Union, Optional, Tuple
@@ -14,6 +15,7 @@ from torch_geometric.data import Data, Batch
 from src.curation.template_generator import generate_fragment_template
 from src.features import get_featurizer_from_vocab
 from src.models.mpnn import BDEModel
+from src.config import load_config #
 
 logger = logging.getLogger(__name__) # Get a logger for this module
 
@@ -195,6 +197,300 @@ class Predictor:
 
         return result_df.reset_index(drop=True)
 
+    @classmethod
+    def from_run_dir(cls, run_dir, device='cpu'):
+        """
+        工廠方法：從訓練目錄自動初始化單一模型預測器。
+        """
+        config_path = os.path.join(run_dir, 'config.yaml')
+        vocab_path = os.path.join(run_dir, 'vocab.json')
+        
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"找不到設定檔: {config_path}")
+            
+        cfg = load_config(config_path) #
+        model_path = os.path.join(run_dir, cfg.train.model_save_path) #
+        
+        return cls(
+            model_path=model_path,
+            vocab_path=vocab_path,
+            featurizer_type=cfg.data.featurizer_type,
+            atom_features=cfg.model.atom_features,
+            num_messages=cfg.model.num_messages,
+            num_tasks=cfg.model.num_tasks,
+            target_columns=cfg.data.target_columns,
+            device=device
+        )
+
+
+class EnsemblePredictor:
+    """Manages multiple Predictor instances for ensemble inference.
+
+    Wraps a list of ``Predictor`` objects and aggregates their predictions by
+    computing per-bond mean and standard deviation.  The output interface is
+    **always identical** regardless of how many models are held:
+
+    * ``{task}_pred_mean`` — mean across all models (best estimate)
+    * ``{task}_pred_std``  — std across all models (uncertainty proxy)
+
+    When only one model is present ``pred_std`` is uniformly ``0.0``.
+
+    The canonical way to create an instance for offline inference is via
+    ``from_run_dir``, which auto-detects ``fold_*/`` sub-directories produced
+    by K-Fold or LOO cross-validation and falls back to single-model mode when
+    none are found.
+
+    Attributes:
+        predictors: Ordered list of loaded ``Predictor`` instances.
+    """
+
+    def __init__(self, predictors: List["Predictor"]) -> None:
+        """Initialise with a pre-built list of predictors.
+
+        Args:
+            predictors: One or more loaded ``Predictor`` instances.
+                        All predictors must share the same ``target_columns``.
+
+        Raises:
+            ValueError: If ``predictors`` is empty.
+        """
+        if not predictors:
+            raise ValueError("EnsemblePredictor requires at least one Predictor.")
+        self.predictors = predictors
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def target_columns(self) -> List[str]:
+        """Target column names derived from the first underlying predictor."""
+        return self.predictors[0].target_columns
+
+    # ------------------------------------------------------------------
+    # Factory
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_run_dir(cls, run_dir: str, device: str = "cpu") -> "EnsemblePredictor":
+        """Factory method: load predictor(s) from a training run directory.
+
+        Scans ``run_dir`` for ``fold_*/`` sub-directories (produced by K-Fold
+        or LOO cross-validation).  If found, one ``Predictor`` is loaded per
+        fold and ensemble mode is activated.  If no fold directories exist, a
+        single model is loaded from ``run_dir`` directly (single-model mode).
+
+        ``config.yaml`` and ``vocab.json`` are always read from ``run_dir``
+        (the run root); model checkpoints are found inside each ``fold_*/``
+        sub-directory or directly in ``run_dir`` for non-CV runs.
+
+        Args:
+            run_dir: Root directory of a completed training run.
+            device:  Torch device string (e.g. ``'cpu'`` or ``'cuda'``).
+
+        Returns:
+            An ``EnsemblePredictor`` ready for ``.predict()`` calls.
+
+        Raises:
+            FileNotFoundError: If ``config.yaml`` or ``vocab.json`` is missing.
+            RuntimeError: If fold directories exist but no valid checkpoints
+                are found inside them.
+        """
+        config_path = os.path.join(run_dir, "config.yaml")
+        vocab_path = os.path.join(run_dir, "vocab.json")
+
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"Training config not found: {config_path}")
+        if not os.path.exists(vocab_path):
+            raise FileNotFoundError(f"Vocabulary file not found: {vocab_path}")
+
+        cfg = load_config(config_path)
+
+        # Auto-detect fold sub-directories (fold_0, fold_1, …)
+        fold_dirs = sorted(glob(os.path.join(run_dir, "fold_*")))
+
+        if fold_dirs:
+            logger.info(
+                "EnsemblePredictor: detected %d fold(s) in '%s' — ensemble mode.",
+                len(fold_dirs), run_dir,
+            )
+            predictors: List["Predictor"] = []
+            for fold_dir in fold_dirs:
+                model_path = os.path.join(fold_dir, cfg.train.model_save_path)
+                if not os.path.exists(model_path):
+                    logger.warning(
+                        "EnsemblePredictor: model not found in '%s' — skipping.", fold_dir
+                    )
+                    continue
+                predictors.append(
+                    Predictor(
+                        model_path=model_path,
+                        vocab_path=vocab_path,
+                        featurizer_type=cfg.data.featurizer_type,
+                        atom_features=cfg.model.atom_features,
+                        num_messages=cfg.model.num_messages,
+                        num_tasks=cfg.model.num_tasks,
+                        target_columns=cfg.data.target_columns,
+                        device=device,
+                    )
+                )
+            if not predictors:
+                raise RuntimeError(
+                    f"EnsemblePredictor: fold directories found but no valid model "
+                    f"checkpoints could be loaded from '{run_dir}'."
+                )
+        else:
+            logger.info(
+                "EnsemblePredictor: no fold directories found in '%s' — single-model mode.",
+                run_dir,
+            )
+            model_path = os.path.join(run_dir, cfg.train.model_save_path)
+            predictors = [
+                Predictor(
+                    model_path=model_path,
+                    vocab_path=vocab_path,
+                    featurizer_type=cfg.data.featurizer_type,
+                    atom_features=cfg.model.atom_features,
+                    num_messages=cfg.model.num_messages,
+                    num_tasks=cfg.model.num_tasks,
+                    target_columns=cfg.data.target_columns,
+                    device=device,
+                )
+            ]
+
+        return cls(predictors)
+
+    # ------------------------------------------------------------------
+    # Inference
+    # ------------------------------------------------------------------
+
+    def predict(
+        self,
+        smiles_list: List[str],
+        drop_duplicates: bool = True,
+    ) -> pd.DataFrame:
+        """Run ensemble prediction and return mean + uncertainty estimates.
+
+        Each underlying ``Predictor`` predicts independently on ``smiles_list``.
+        Predictions are aligned by ``(molecule, bond_index)`` key and aggregated:
+
+        * ``{task}_pred_mean`` — mean across all models (best estimate)
+        * ``{task}_pred_std``  — std across all models (uncertainty proxy)
+
+        Fragment structural columns (``molecule``, ``bond_index``, ``fragment1``,
+        ``fragment2``, ``is_valid``, …) are preserved from the first successful
+        predictor.  When only one model is loaded, ``pred_std`` is ``0.0``.
+
+        Args:
+            smiles_list:     List of SMILES strings to predict on.
+            drop_duplicates: If ``True``, bonds producing identical fragment
+                             pairs are deduplicated (first occurrence kept).
+
+        Returns:
+            DataFrame containing fragment structural columns plus
+            ``{task}_pred_mean`` and ``{task}_pred_std`` for every task.
+            Returns an empty DataFrame if all predictors fail.
+        """
+        pred_cols = [f"{t}_pred" for t in self.target_columns]
+        key_cols = ["molecule", "bond_index"]
+
+        structural_df: Optional[pd.DataFrame] = None   # fragment info reference
+        all_pred_dfs: List[pd.DataFrame] = []
+
+        for i, predictor in enumerate(self.predictors):
+            try:
+                # Collect all bonds without deduplication for consistent alignment;
+                # deduplication is applied once at the end if requested.
+                pred_df = predictor.predict(smiles_list, drop_duplicates=False)
+            except Exception as exc:
+                logger.warning(
+                    "EnsemblePredictor: predictor %d failed — skipping. Error: %s",
+                    i, exc,
+                )
+                continue
+
+            if pred_df.empty:
+                logger.warning(
+                    "EnsemblePredictor: predictor %d returned empty predictions.", i
+                )
+                continue
+
+            if structural_df is None:
+                # Capture structural / fragment columns from the first success
+                non_pred_cols = [c for c in pred_df.columns if c not in pred_cols]
+                structural_df = pred_df[non_pred_cols].copy()
+
+            all_pred_dfs.append(pred_df)
+
+        if structural_df is None or not all_pred_dfs:
+            logger.warning("EnsemblePredictor: no valid predictions from any model.")
+            return pd.DataFrame()
+
+        # ── Stack predictions and compute mean / std ───────────────────────
+        result_df = structural_df.copy()
+        for col in pred_cols:
+            stacked_arrays: List[np.ndarray] = []
+            for pred_df in all_pred_dfs:
+                # Align each model's predictions to the reference row order
+                aligned = pd.merge(
+                    structural_df[key_cols],
+                    pred_df[key_cols + [col]],
+                    on=key_cols,
+                    how="left",
+                )
+                stacked_arrays.append(aligned[col].values.astype(float))
+
+            arr = np.vstack(stacked_arrays)                   # [n_models, n_bonds]
+            task_name = col[: -len("_pred")]                  # strip '_pred' suffix
+            result_df[f"{task_name}_pred_mean"] = arr.mean(axis=0)
+            result_df[f"{task_name}_pred_std"]  = arr.std(axis=0)
+
+        # ── Optional deduplication (mirrors Predictor.predict logic) ──────
+        if (
+            drop_duplicates
+            and "fragment1" in result_df.columns
+            and "fragment2" in result_df.columns
+        ):
+            canonical_pairs = [
+                tuple(sorted(pair))
+                for pair in result_df[["fragment1", "fragment2"]].values
+            ]
+            result_df = result_df.copy()
+            result_df["_canonical_frag_pair"] = canonical_pairs
+            result_df = result_df.drop_duplicates(
+                subset=["molecule", "_canonical_frag_pair"]
+            ).drop(columns=["_canonical_frag_pair"])
+
+        return result_df.reset_index(drop=True)
+
+
+def get_bde_predictions(
+    run_dir: str,
+    smiles: Union[str, List[str]],
+    device: str = "cpu",
+    **kwargs,
+) -> pd.DataFrame:
+    """Convenience function: load ensemble from ``run_dir`` and predict.
+
+    Delegates to ``EnsemblePredictor.from_run_dir``.  Auto-detects fold
+    sub-directories and enables ensemble mode (mean + std) when present;
+    falls back to single-model mode otherwise.
+
+    Args:
+        run_dir: Root directory of a completed training run.
+        smiles:  A single SMILES string or a list of SMILES strings.
+        device:  Torch device string (``'cpu'`` or ``'cuda'``).
+        **kwargs: Additional keyword arguments forwarded to
+                  ``EnsemblePredictor.predict`` (e.g. ``drop_duplicates``).
+
+    Returns:
+        DataFrame with ``{task}_pred_mean`` and ``{task}_pred_std`` columns
+        plus structural fragment information.
+    """
+    ensemble = EnsemblePredictor.from_run_dir(run_dir, device=device)
+    smiles_list = [smiles] if isinstance(smiles, str) else smiles
+    return ensemble.predict(smiles_list, **kwargs)
+
 
 def get_bde_predictions_with_embeddings(
     smiles: Union[str, List[str]],
@@ -342,58 +638,3 @@ def get_bde_predictions_with_embeddings(
         logger.error(f"An error occurred during prediction: {e}", exc_info=True)
         return pd.DataFrame(), {}
 
-
-
-
-def get_bde_predictions(
-    smiles: Union[str, List[str]],
-    model_path: str,
-    vocab_path: str,
-    featurizer_type: str = 'TokenFeaturizer',
-    atom_features: int = 128,
-    num_messages: int = 6, # Add num_messages parameter
-    num_tasks: int = 1,
-    target_columns: List[str] = ['bde'],
-    drop_duplicates: bool = True,
-    device: str = 'cpu'
-) -> pd.DataFrame:
-    """
-    A simple, one-shot function to get BDE predictions for one or more molecules.
-
-    This is a high-level wrapper around the Predictor class that handles
-    initialization, prediction, and result formatting.
-
-    Args:
-        smiles (Union[str, List[str]]): A single SMILES string or a list of SMILES strings.
-        model_path (str): Path to the trained model checkpoint (.pt file).
-        vocab_path (str): Path to the vocabulary file (.json) used during training.
-        featurizer_type (str): Type of featurizer to use.
-        num_messages (int): Number of message passing layers used in the model.
-        drop_duplicates (bool, optional): If True, remove predictions for bonds that
-                                          result in the same set of fragments. Defaults to True.
-        device (str, optional): The device to run inference on ('cpu' or 'cuda'). Defaults to 'cpu'.
-
-    Returns:
-        pd.DataFrame: A DataFrame containing predictions and fragment info.
-    """
-    if isinstance(smiles, str):
-        smiles_list = [smiles]
-    else:
-        smiles_list = smiles
-
-    try:
-        predictor = Predictor(
-            model_path=model_path,
-            vocab_path=vocab_path,
-            featurizer_type=featurizer_type,
-            atom_features=atom_features,
-            num_messages=num_messages, # Pass num_messages here
-            num_tasks=num_tasks,
-            target_columns=target_columns,
-            device=device
-        )
-        results_df = predictor.predict(smiles_list, drop_duplicates=drop_duplicates)
-        return results_df
-    except Exception as e:
-        logger.error(f"An error occurred during prediction: {e}", exc_info=True)
-        return pd.DataFrame()

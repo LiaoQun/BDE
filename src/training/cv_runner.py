@@ -66,8 +66,6 @@ class FoldResult:
 def _build_model(cfg: MainConfig, featurizer, device: torch.device) -> BDEModel:
     """Instantiate a fresh, randomly initialised ``BDEModel``.
 
-    A new model is created for every fold so that folds are independent.
-
     Args:
         cfg: Full configuration object.
         featurizer: Fitted featurizer providing ``atom_dim`` / ``bond_dim``.
@@ -95,16 +93,12 @@ def _build_loaders(
 ) -> Tuple[DataLoader, Optional[DataLoader]]:
     """Create ``BDEDataset`` objects and wrap them in ``DataLoader`` instances.
 
-    The dataset root directories are scoped per fold so that PyG's on-disk
-    cache does not collide between folds.
-
     Args:
         cfg: Full configuration object.
         featurizer: Fitted featurizer.
         inner_train: Inner training data for this fold.
         inner_val: Inner validation data for this fold (may be empty).
-        fold_tag: String tag used in the dataset directory name (e.g.
-            ``'fold_0'``).
+        fold_tag: String tag used in the dataset directory name.
 
     Returns:
         Tuple ``(train_loader, val_loader)`` where *val_loader* is ``None``
@@ -141,11 +135,6 @@ def _build_loaders(
 
 def _cleanup_fold(*objects) -> None:
     """Explicitly release heavy objects at the end of a fold.
-
-    Calling ``del`` on PyTorch / PyG objects and then invoking the garbage
-    collector ensures that GPU VRAM and CPU RAM are freed before the next
-    fold's tensors are allocated.  Without this, K folds would accumulate
-    K sets of graph tensors in memory simultaneously.
 
     Args:
         *objects: Arbitrary objects to delete (datasets, loaders, model,
@@ -191,7 +180,6 @@ def run_cv_loop(
     Returns:
         List of ``FoldResult`` objects, one per fold, in fold order.
     """
-    # Import here to avoid circular imports with pipeline.py
     from src.data.splitter import generate_cv_splits
 
     fold_results: List[FoldResult] = []
@@ -205,9 +193,6 @@ def run_cv_loop(
 
     for broad_train, outer_test, fold_idx in cv_gen:
         fold_tag = f"fold_{fold_idx}"
-        # Always create a fold_N/ subdirectory, regardless of cv strategy.
-        # This ensures a uniform run_dir layout for both cv='none' and K-Fold,
-        # making FoldResult.model_path predictable and Predictor maintenance simpler.
         fold_run_dir = os.path.join(run_dir, fold_tag)
         os.makedirs(fold_run_dir, exist_ok=True)
 
@@ -230,7 +215,6 @@ def run_cv_loop(
                 len(inner_val),
             )
         else:
-            # Method-A: no inner validation → no early stopping
             inner_train = broad_train
             inner_val = []
             logger.info(
@@ -257,15 +241,11 @@ def run_cv_loop(
             model=model,
             optimizer=optimizer,
             train_loader=train_loader,
-            val_loader=val_loader,       # None → Method-A (no early stopping)
-            test_loader=None,            # Outer-test evaluation in ensemble.py
+            val_loader=val_loader,
             device=device,
             cfg=cfg.train,
             model_cfg=cfg.model,
             run_dir=fold_run_dir,
-            full_dataset_df=None,        # Not needed here
-            data_splits={},              # Not needed here
-            vocab_path="",               # Not needed here
             target_columns=cfg.data.target_columns,
             fold_idx=fold_idx,
         )
@@ -284,7 +264,7 @@ def run_cv_loop(
             "Fold %d complete. Model saved → %s", fold_idx, result.model_path
         )
 
-        # ── OOM prevention: release all heavy fold-specific objects ────────
+        # ── OOM prevention ─────────────────────────────────────────────────
         _cleanup_fold(
             train_loader, val_loader,
             model, optimizer, trainer,

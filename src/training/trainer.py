@@ -1,23 +1,28 @@
 import os
-import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
-from typing import Dict, List, Optional, Tuple
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from typing import Dict, List, Optional
 import logging
 
 from src.config import TrainConfig, ModelConfig
 from src.utils.reporting import save_training_log
-from src.utils.plotting import plot_training_curve, plot_parity
-from src.inference.predictor import Predictor
+from src.utils.plotting import plot_training_curve
 
 logger = logging.getLogger(__name__)
 
 class Trainer:
     """
-    Handles the model training, validation, and evaluation pipeline.
+    Handles the model training loop for a single fold.
+
+    Responsibilities:
+    - Run training epochs (with or without validation / early stopping)
+    - Save the best model checkpoint
+    - Persist training log CSV and loss curve plot
+
+    Evaluation against ground-truth labels is intentionally out of scope
+    and is handled by EnsembleEvaluator in src/training/ensemble.py.
     """
 
     def __init__(
@@ -26,34 +31,37 @@ class Trainer:
         optimizer,
         train_loader,
         val_loader,
-        test_loader,
         device,
         cfg: TrainConfig,
         model_cfg: ModelConfig,
         run_dir: str,
-        full_dataset_df: Optional[pd.DataFrame] = None,
-        data_splits: Optional[Dict[str, List]] = None,
-        vocab_path: str = "",
-        featurizer_type: str = 'TokenFeaturizer',
         target_columns: List[str] = None,
         fold_idx: int = 0,
     ):
+        """
+        Args:
+            model: The BDEModel instance to train.
+            optimizer: The optimiser (e.g. Adam).
+            train_loader: DataLoader for the inner training set.
+            val_loader: DataLoader for the inner validation set.
+                        Pass None to use Method-A (no early stopping).
+            device: torch.device to run training on.
+            cfg: TrainConfig with epochs, lr, batch_size, etc.
+            model_cfg: ModelConfig with atom_features, num_messages, etc.
+            run_dir: Directory to save model checkpoint and training logs.
+            target_columns: Names of the prediction targets.
+            fold_idx: Zero-based fold index (used for log prefixing).
+        """
         self.model = model
         self.optimizer = optimizer
         self.train_loader = train_loader
-        self.val_loader = val_loader  # None means Method-A (no validation)
-        self.test_loader = test_loader
+        self.val_loader = val_loader
         self.device = device
         self.cfg = cfg
         self.model_cfg = model_cfg
         self.run_dir = run_dir
         self.fold_idx = fold_idx
-        # Since cv_runner.py manages fold-specific directories, we don't need fold_idx in the filename
         self.model_save_path = os.path.join(run_dir, cfg.model_save_path)
-        self.vocab_path = vocab_path
-        self.featurizer_type = featurizer_type
-        self.full_dataset_df = full_dataset_df
-        self.data_splits = data_splits
         self.target_columns = target_columns if target_columns is not None else ['bde']
 
     def train(self) -> None:
@@ -142,7 +150,7 @@ class Trainer:
             plot_training_curve(history_df, self.run_dir, suffix="")
 
     def _train_epoch(self, epoch: int) -> float:
-        """Handles the training logic for a single epoch."""
+        """Runs one training epoch and returns the average loss."""
         self.model.train()
         total_loss = 0.0
         for batch in tqdm(self.train_loader, desc=f"Epoch {epoch} [Train]", leave=False):
@@ -160,7 +168,7 @@ class Trainer:
         return total_loss / n if n > 0 else 0.0
 
     def _validate_epoch(self, epoch: int) -> float:
-        """Handles the validation logic for a single epoch."""
+        """Runs one validation epoch and returns the average loss."""
         self.model.eval()
         total_loss = 0.0
         with torch.no_grad():
@@ -174,85 +182,3 @@ class Trainer:
 
         n = len(self.val_loader.dataset)
         return total_loss / n if n > 0 else 0.0
-
-    def evaluate(self):
-        """
-        Evaluates the best model on **train** and **test** splits only,
-        saves full-prediction CSVs, and generates a single multi-task
-        parity plot (one subplot per task, train/test overlaid).
-
-        The ``val`` split stored in ``self.data_splits`` is intentionally
-        skipped here — validation is used only for early-stopping during
-        training.
-        """
-        logger.info(
-            f"Loading best model from {self.model_save_path} for final evaluation..."
-        )
-
-        try:
-            predictor = Predictor(
-                model_path=self.model_save_path,
-                vocab_path=self.vocab_path,
-                featurizer_type=self.featurizer_type,
-                atom_features=self.model_cfg.atom_features,
-                num_messages=self.model_cfg.num_messages,
-                num_tasks=self.model_cfg.num_tasks,
-                target_columns=self.target_columns,
-                device=self.device,
-            )
-        except FileNotFoundError as e:
-            logger.info(f"Could not initialise predictor: {e}. Aborting evaluation.")
-            return
-
-        # results_for_plot structure:
-        #   results_for_plot[split][task] = (y_true: np.ndarray, y_pred: np.ndarray)
-        results_for_plot: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray]]] = {}
-
-        # Only evaluate train and test; skip val
-        for split_name in ("train", "test"):
-            data_list = self.data_splits.get(split_name, [])
-            logger.info(f"--- Predicting on {split_name} set ---")
-            if not data_list:
-                logger.info(f"{split_name} set is empty. Skipping.")
-                continue
-
-            smiles_list = sorted({item[0] for item in data_list})
-            pred_df = predictor.predict(smiles_list, drop_duplicates=False)
-
-            # Merge predictions with ground-truth labels
-            merged_df = pd.merge(
-                pred_df,
-                self.full_dataset_df[['molecule', 'bond_index'] + self.target_columns],
-                on=['molecule', 'bond_index'],
-                how='inner',
-            )
-
-            # Persist detailed predictions
-            output_path = os.path.join(self.run_dir, f'predictions_{split_name}.csv')
-            merged_df.to_csv(output_path, index=False)
-            logger.info(f"Saved detailed predictions for {split_name} set to {output_path}")
-
-            if merged_df.empty:
-                continue
-
-            results_for_plot[split_name] = {}
-            for task in self.target_columns:
-                pred_col = f"{task}_pred"
-                if pred_col not in merged_df.columns:
-                    continue
-                valid_mask = ~merged_df[task].isna()
-                y_true = merged_df.loc[valid_mask, task].values
-                y_pred = merged_df.loc[valid_mask, pred_col].values
-                if len(y_true) > 0:
-                    results_for_plot[split_name][task] = (y_true, y_pred)
-
-        # ── Single combined parity plot covering all tasks ────────────────────
-        if results_for_plot:
-            parity_path = os.path.join(self.run_dir, "parity_plot_all.png")
-            plot_parity(
-                results=results_for_plot,
-                task_names=self.target_columns,
-                output_path=parity_path,
-            )
-        else:
-            logger.info("No results to plot.")

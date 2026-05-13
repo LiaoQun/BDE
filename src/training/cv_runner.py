@@ -7,20 +7,24 @@ This module is responsible for the **per-fold training lifecycle**:
   3. Build ``BDEDataset`` objects and ``DataLoader`` instances.
   4. Instantiate a fresh ``BDEModel`` and ``Adam`` optimiser.
   5. Run ``Trainer.train()``.
-  6. Collect and return a ``FoldResult``.
-  7. **Explicitly release** all heavy GPU/CPU tensors before the next fold
-     to prevent OOM accumulation across folds.
+  6. Immediately evaluate on ``outer_test`` using the just-saved checkpoint.
+  7. Append predictions to ``cv_predictions.csv``.
+  8. **Explicitly release** all heavy GPU/CPU tensors before the next fold.
 
-The public entry point is ``run_cv_loop``, which delegates per-fold work to
-private helpers and accumulates ``FoldResult`` objects for downstream use.
+After all folds complete, ``run_cv_loop`` draws the CV parity plot from
+the accumulated ``cv_predictions.csv``.
 """
 import gc
 import logging
 import os
+import shutil
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
+import numpy as np
+import pandas as pd
 import torch
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from torch.optim import Optimizer
 from torch_geometric.loader import DataLoader
 
@@ -29,12 +33,13 @@ from src.data.dataset import BDEDataset
 from src.data.splitter import SmilesData, split_inner_val
 from src.models.mpnn import BDEModel
 from src.training.trainer import Trainer
+from src.utils.plotting import plot_parity
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# FoldResult — data-transfer object returned after each fold
+# FoldResult
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -42,19 +47,14 @@ class FoldResult:
     """Aggregates the outcomes of a single CV fold.
 
     Attributes:
-        fold_idx: Zero-based fold index.
-        model_path: Absolute path to the saved model checkpoint for this fold.
-        outer_test_data: The sealed outer-loop test data for this fold.
-            Populated only when the CV strategy produces a non-empty outer
-            test set (i.e. not ``cv='none'``).
-        n_inner_train: Number of bond entries in the inner training set.
-        n_inner_val: Number of bond entries in the inner validation set
-            (0 when ``val_size == 0.0``).
+        fold_idx:       Zero-based fold index.
+        model_path:     Absolute path to the saved model checkpoint.
+        n_inner_train:  Number of entries in the inner training set.
+        n_inner_val:    Number of entries in the inner validation set
+                        (0 when ``val_size == 0.0``).
     """
-
     fold_idx: int
     model_path: str
-    outer_test_data: SmilesData = field(default_factory=list)
     n_inner_train: int = 0
     n_inner_val: int = 0
 
@@ -64,16 +64,6 @@ class FoldResult:
 # ---------------------------------------------------------------------------
 
 def _build_model(cfg: MainConfig, featurizer, device: torch.device) -> BDEModel:
-    """Instantiate a fresh, randomly initialised ``BDEModel``.
-
-    Args:
-        cfg: Full configuration object.
-        featurizer: Fitted featurizer providing ``atom_dim`` / ``bond_dim``.
-        device: Target device (CPU or CUDA).
-
-    Returns:
-        A ``BDEModel`` instance moved to *device*.
-    """
     return BDEModel(
         atom_input_dim=featurizer.atom_dim,
         bond_input_dim=featurizer.bond_dim,
@@ -91,19 +81,6 @@ def _build_loaders(
     inner_val: SmilesData,
     fold_tag: str,
 ) -> Tuple[DataLoader, Optional[DataLoader]]:
-    """Create ``BDEDataset`` objects and wrap them in ``DataLoader`` instances.
-
-    Args:
-        cfg: Full configuration object.
-        featurizer: Fitted featurizer.
-        inner_train: Inner training data for this fold.
-        inner_val: Inner validation data for this fold (may be empty).
-        fold_tag: String tag used in the dataset directory name.
-
-    Returns:
-        Tuple ``(train_loader, val_loader)`` where *val_loader* is ``None``
-        when *inner_val* is empty.
-    """
     dataset_base = os.path.join(cfg.data.dataset_dir, fold_tag)
 
     train_dataset = BDEDataset(
@@ -134,18 +111,96 @@ def _build_loaders(
 
 
 def _cleanup_fold(*objects) -> None:
-    """Explicitly release heavy objects at the end of a fold.
-
-    Args:
-        *objects: Arbitrary objects to delete (datasets, loaders, model,
-            optimiser, trainer, …).
-    """
     for obj in objects:
         del obj
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         logger.debug("CUDA cache cleared after fold cleanup.")
+
+
+def _append_cv_predictions(pred_df: pd.DataFrame, run_dir: str) -> None:
+    """Append fold predictions to cv_predictions.csv.
+
+    Uses header=True on first write, header=False on subsequent appends
+    so the file is always a valid single-header CSV.
+
+    Args:
+        pred_df:  Predictions DataFrame for this fold (includes 'fold' column).
+        run_dir:  Root run directory where cv_predictions.csv lives.
+    """
+    csv_path = os.path.join(run_dir, "cv_predictions.csv")
+    write_header = not os.path.exists(csv_path)
+    pred_df.to_csv(csv_path, mode='a', header=write_header, index=False)
+    logger.info(
+        "Fold %d predictions appended → %s (%d rows)",
+        pred_df['fold'].iloc[0], csv_path, len(pred_df),
+    )
+
+
+def _plot_cv_parity(
+    run_dir: str,
+    full_df: pd.DataFrame,
+    cfg: MainConfig,
+) -> None:
+    """Read cv_predictions.csv and draw a parity plot.
+
+    Each molecule appears exactly once, predicted by the fold that was
+    blind to it — statistically honest CV parity plot with no data leakage.
+
+    Args:
+        run_dir:  Root run directory.
+        full_df:  Complete merged DataFrame for ground-truth label lookup.
+        cfg:      Full configuration object.
+    """
+    csv_path = os.path.join(run_dir, "cv_predictions.csv")
+    if not os.path.exists(csv_path):
+        logger.info("No cv_predictions.csv found — skipping CV parity plot.")
+        return
+
+    combined_df = pd.read_csv(csv_path)
+
+    # Join ground-truth labels
+    gt_cols = ["molecule", "bond_index"] + cfg.data.target_columns
+    available_gt = [c for c in gt_cols if c in full_df.columns]
+    if available_gt:
+        combined_df = pd.merge(
+            combined_df,
+            full_df[available_gt],
+            on=["molecule", "bond_index"],
+            how="left",
+        )
+
+    # Build results dict: results['cv'][task] = (y_true, y_pred)
+    plot_results = {"cv": {}}
+    for task in cfg.data.target_columns:
+        pred_col = f"{task}_pred"
+        if task not in combined_df.columns or pred_col not in combined_df.columns:
+            continue
+        valid = ~combined_df[task].isna()
+        y_true = combined_df.loc[valid, task].values
+        y_pred = combined_df.loc[valid, pred_col].values
+        if len(y_true) == 0:
+            continue
+
+        plot_results["cv"][task] = (y_true, y_pred)
+        mae  = float(mean_absolute_error(y_true, y_pred))
+        rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+        r2   = float(r2_score(y_true, y_pred))
+        logger.info(
+            "CV overall | %s → MAE=%.4f  RMSE=%.4f  R²=%.4f",
+            task, mae, rmse, r2,
+        )
+
+    if plot_results["cv"]:
+        parity_path = os.path.join(run_dir, "cv_parity_plot.png")
+        plot_parity(
+            results=plot_results,
+            task_names=cfg.data.target_columns,
+            output_path=parity_path,
+        )
+    else:
+        logger.info("No ground-truth labels available for CV parity plot.")
 
 
 # ---------------------------------------------------------------------------
@@ -159,28 +214,34 @@ def run_cv_loop(
     featurizer,
     device: torch.device,
     run_dir: str,
+    full_df: pd.DataFrame,
 ) -> List[FoldResult]:
     """Execute the full cross-validation training loop.
 
-    For each fold produced by ``generate_cv_splits``:
+    For each fold:
       1. Split ``broad_train`` into ``inner_train`` / ``inner_val``.
       2. Build datasets, loaders, a fresh model, and an optimiser.
       3. Run ``Trainer.train()``.
-      4. Record the ``FoldResult`` (model path, outer_test, sizes).
-      5. Release all heavy tensors (OOM prevention).
+      4. Immediately load the saved checkpoint and predict on ``outer_test``.
+      5. Append predictions to ``cv_predictions.csv``.
+      6. Release all heavy tensors.
+
+    After all folds, draw the CV parity plot from ``cv_predictions.csv``.
 
     Args:
-        base_data: Processed smiles data that is always included in training.
+        base_data: Processed smiles data always included in training.
         extra_data: Processed smiles data subject to CV splitting.
         cfg: Full configuration object.
         featurizer: Fitted featurizer (shared across folds, read-only).
         device: Training device.
         run_dir: Root directory for all run artefacts.
+        full_df: Complete merged DataFrame for ground-truth label lookup.
 
     Returns:
         List of ``FoldResult`` objects, one per fold, in fold order.
     """
     from src.data.splitter import generate_cv_splits
+    from src.inference.predictor import Predictor
 
     fold_results: List[FoldResult] = []
 
@@ -196,6 +257,14 @@ def run_cv_loop(
         fold_run_dir = os.path.join(run_dir, fold_tag)
         os.makedirs(fold_run_dir, exist_ok=True)
 
+        # Copy config.yaml and vocab.json into fold_run_dir so that
+        # Predictor.from_run_dir(fold_run_dir) can find them.
+        for filename in ("config.yaml", "vocab.json"):
+            src = os.path.join(run_dir, filename)
+            dst = os.path.join(fold_run_dir, filename)
+            if os.path.exists(src) and not os.path.exists(dst):
+                shutil.copy2(src, dst)
+
         logger.info(
             "\n%s\n  FOLD %d  |  broad_train: %d entries  |  outer_test: %d entries\n%s",
             "=" * 62, fold_idx, len(broad_train), len(outer_test), "=" * 62,
@@ -210,16 +279,12 @@ def run_cv_loop(
             )
             logger.info(
                 "Inner split (val_size=%.0f%%): inner_train=%d, inner_val=%d",
-                cfg.data.val_size * 100,
-                len(inner_train),
-                len(inner_val),
+                cfg.data.val_size * 100, len(inner_train), len(inner_val),
             )
         else:
             inner_train = broad_train
             inner_val = []
-            logger.info(
-                "Inner split: val_size=0.0 → Method-A (no early stopping)."
-            )
+            logger.info("Inner split: val_size=0.0 → Method-A (no early stopping).")
 
         # ── Build data loaders ─────────────────────────────────────────────
         train_loader, val_loader = _build_loaders(
@@ -251,28 +316,56 @@ def run_cv_loop(
         )
         trainer.train()
 
+        # ── Evaluate on outer_test immediately after training ──────────────
+        if outer_test:
+            logger.info(
+                "Fold %d: evaluating outer_test (%d molecule(s))…",
+                fold_idx,
+                len({item[0] for item in outer_test}),
+            )
+            try:
+                predictor = Predictor.from_run_dir(fold_run_dir, device=str(device))
+                smiles_list = sorted({item[0] for item in outer_test})
+                pred_df = predictor.predict(smiles_list, drop_duplicates=False)
+                if not pred_df.empty:
+                    pred_df['fold'] = fold_idx
+                    _append_cv_predictions(pred_df, run_dir)
+                else:
+                    logger.warning(
+                        "Fold %d: outer_test prediction returned empty DataFrame.",
+                        fold_idx,
+                    )
+            except Exception as exc:
+                logger.error(
+                    "Fold %d: outer_test evaluation failed: %s",
+                    fold_idx, exc, exc_info=True,
+                )
+        else:
+            logger.info(
+                "Fold %d: no outer_test (cv='none') — skipping fold evaluation.",
+                fold_idx,
+            )
+
         # ── Record result ──────────────────────────────────────────────────
         result = FoldResult(
             fold_idx=fold_idx,
             model_path=trainer.model_save_path,
-            outer_test_data=outer_test,
             n_inner_train=len(inner_train),
             n_inner_val=len(inner_val),
         )
         fold_results.append(result)
-        logger.info(
-            "Fold %d complete. Model saved → %s", fold_idx, result.model_path
-        )
+        logger.info("Fold %d complete. Model saved → %s", fold_idx, result.model_path)
 
         # ── OOM prevention ─────────────────────────────────────────────────
-        _cleanup_fold(
-            train_loader, val_loader,
-            model, optimizer, trainer,
-        )
+        _cleanup_fold(train_loader, val_loader, model, optimizer, trainer)
 
     logger.info(
         "\nAll %d fold(s) finished. Model checkpoints:\n  %s",
         len(fold_results),
         "\n  ".join(r.model_path for r in fold_results),
     )
+
+    # ── Draw CV parity plot from accumulated cv_predictions.csv ───────────
+    _plot_cv_parity(run_dir, full_df, cfg)
+
     return fold_results

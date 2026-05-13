@@ -32,11 +32,25 @@ def _config_to_dict(cfg: MainConfig) -> Dict[str, Any]:
     """
     Converts a MainConfig dataclass into a plain nested dictionary,
     ready for YAML serialisation.
+
+    Fields declared with ``field(init=False)`` (e.g. ``ModelConfig.num_tasks``)
+    are derived values and must be excluded: they cannot be passed back to
+    ``__init__`` on reload, and are re-derived by ``__post_init__`` anyway.
     """
+    import dataclasses
+
+    def _to_dict_excluding_non_init(obj) -> Dict[str, Any]:
+        """Return a dict of only the init=True fields of a dataclass."""
+        return {
+            f.name: getattr(obj, f.name)
+            for f in dataclasses.fields(obj)
+            if f.init
+        }
+
     return {
-        "data": cfg.data.__dict__.copy(),
-        "model": cfg.model.__dict__.copy(),
-        "train": cfg.train.__dict__.copy(),
+        "data":  _to_dict_excluding_non_init(cfg.data),
+        "model": _to_dict_excluding_non_init(cfg.model),
+        "train": _to_dict_excluding_non_init(cfg.train),
     }
 
 
@@ -63,7 +77,7 @@ def load_config(config_path: str) -> MainConfig:
 
     # Populate dataclasses dynamically
     try:
-        data_cfg = DataConfig(**raw.get("data", {}))
+        data_cfg  = DataConfig(**raw.get("data", {}))
         model_cfg = ModelConfig(**raw.get("model", {}))
         train_cfg = TrainConfig(**raw.get("train", {}))
     except TypeError as e:
@@ -81,7 +95,11 @@ def save_flattened_config(cfg: MainConfig, run_dir: str) -> None:
     """
     Saves the fully resolved (flattened) config as a single self-contained
     YAML file in the run directory.
-    No `_base_` reference — the file alone is sufficient to reproduce the run.
+
+    Only ``init=True`` fields are written, so the file can be round-tripped
+    back through ``load_config`` without errors.  Fields like
+    ``ModelConfig.num_tasks`` that are derived in ``__post_init__`` are
+    intentionally omitted — they will be re-derived on reload.
 
     Args:
         cfg (MainConfig): The fully populated config dataclass.

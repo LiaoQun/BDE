@@ -42,7 +42,16 @@ def plot_training_curve(
 _SPLIT_STYLES: Dict[str, Dict] = {
     "train": {"color": "#2196F3", "alpha": 0.45, "label": "Train"},
     "test":  {"color": "#F44336", "alpha": 0.55, "label": "Test"},
+    "cv":    {"color": "#4CAF50", "alpha": 0.55, "label": "CV (outer test)"},
 }
+
+# Box x-positions for stats annotations (one per split)
+_BOX_XPOS: Dict[str, float] = {
+    "train": 0.04,
+    "test":  0.36,
+    "cv":    0.04,   # cv is never shown alongside train/test, so reuse left pos
+}
+_FIXED_YPOS = 0.97
 
 
 def _compute_stats(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
@@ -65,15 +74,15 @@ def plot_parity(
     Layout
     ------
     * One **column per task** (side-by-side).
-    * Each subplot overlays **train** (blue) and **test** (red) scatter points
-      on the same axes so the two splits can be compared at a glance.
-    * Per-split statistics (MAE / RMSE / R²) are shown in **separate,
-      colour-coded text boxes** inside each subplot.
+    * Each subplot overlays the available splits (``train``, ``test``, ``cv``)
+      so they can be compared at a glance.
+    * Per-split statistics (MAE / RMSE / R²) are shown in separate,
+      colour-coded text boxes inside each subplot.
+
+    Recognised split keys: ``"train"``, ``"test"``, ``"cv"``.
 
     Args:
         results: Nested dict  ``results[split][task] = (y_true, y_pred)``.
-                 Recognised split keys: ``"train"``, ``"test"``.
-                 Tasks not present in a split are silently skipped.
         task_names: Ordered list of task names (determines column order).
         output_path: If provided, the figure is saved to this path.
 
@@ -119,15 +128,11 @@ def plot_parity(
     )
     fig.suptitle("Parity Plot — All Tasks", fontsize=15, y=1.01)
 
-    # Vertical anchors for the two stats boxes (train above, test below)
-    _BOX_XPOS = {"train": 0.04, "test": 0.3}
-    _FIXED_YPOS = 0.97
-
     for col_idx, task in enumerate(task_names):
         ax = axes[0][col_idx]
         has_data = False
 
-        for split in ("train", "test"):
+        for split in ("train", "test", "cv"):
             split_dict = results.get(split, {})
             if task not in split_dict:
                 continue
@@ -275,8 +280,7 @@ def plot_parity_ensemble(
     )
     fig.suptitle("Ensemble Parity Plot — All Tasks", fontsize=15, y=1.01)
 
-    _BOX_XPOS = {"train": 0.04, "test": 0.35, "extra": 0.66}
-    _FIXED_YPOS = 0.97
+    _ENS_BOX_XPOS = {"train": 0.04, "test": 0.35, "extra": 0.66}
 
     for col_idx, task in enumerate(task_names):
         ax = axes[0][col_idx]
@@ -321,9 +325,9 @@ def plot_parity_ensemble(
                 edgecolor=style["color"],
                 alpha=0.88,
             )
-            if split in _BOX_XPOS:
+            if split in _ENS_BOX_XPOS:
                 ax.text(
-                    _BOX_XPOS[split], _FIXED_YPOS,
+                    _ENS_BOX_XPOS[split], _FIXED_YPOS,
                     stats_str,
                     transform=ax.transAxes,
                     fontsize=8,

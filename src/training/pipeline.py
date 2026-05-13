@@ -7,11 +7,12 @@ the complete training lifecycle:
   1. Load and prepare base and extra datasets.
   2. Build and persist the featurizer vocabulary.
   3. Delegate the cross-validation loop to ``cv_runner.run_cv_loop``.
-  4. Delegate post-training inference to ``ensemble.run_ensemble_prediction``.
+     - Each fold trains, evaluates on outer_test, and appends to
+       ``cv_predictions.csv`` before releasing memory.
+     - After all folds, the CV parity plot is drawn automatically.
 
-``run_training`` is intentionally thin: it only wires together the specialised
-modules and passes data between them.  It contains no training or inference
-logic itself.
+``run_training`` is intentionally thin: it only wires together the
+specialised modules and passes data between them.
 """
 import logging
 import os
@@ -25,37 +26,35 @@ from src.config.schema import MainConfig
 from src.data.preprocessing import load_and_merge_data, prepare_data
 from src.features import get_featurizer
 from src.training.cv_runner import run_cv_loop
-from src.training.ensemble import run_ensemble_prediction
 
 logger = logging.getLogger(__name__)
 
+
 def set_seed(seed: int):
-    """固定所有亂數種子以確保實驗可重現。"""
+    """Fix all random seeds for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)  # 若有多張 GPU
+        torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
+
 def run_training(cfg: MainConfig, run_dir: str) -> Optional[str]:
-    """Orchestrate the full CV training and ensemble evaluation pipeline.
+    """Orchestrate the full CV training pipeline.
 
     Steps
     -----
-    1. Load ``base_data`` (always in training set) from ``cfg.data.base_data_paths``.
+    1. Load ``base_data`` from ``cfg.data.base_data_paths``.
     2. Optionally load ``extra_data`` from ``cfg.data.extra_data_paths``.
-    3. Build and save the featurizer vocabulary from the UNION of base + extra
-       SMILES, so that extra-data molecules are never OOV at featurization time.
-    4. Hand off to ``run_cv_loop`` for per-fold training.
-    5. Hand off to ``run_ensemble_prediction`` for post-training evaluation.
+    3. Build and save the featurizer vocabulary from the union of all SMILES.
+    4. Hand off to ``run_cv_loop`` for per-fold training and evaluation.
 
     Args:
-        cfg: Fully populated ``MainConfig`` instance.
-        run_dir: Root directory for all run artefacts (logs, checkpoints,
-            plots, CSVs).
+        cfg:     Fully populated ``MainConfig`` instance.
+        run_dir: Root directory for all run artefacts.
 
     Returns:
         *run_dir* on successful completion, or ``None`` if the pipeline
@@ -147,25 +146,12 @@ def run_training(cfg: MainConfig, run_dir: str) -> Optional[str]:
         featurizer=featurizer,
         device=device,
         run_dir=run_dir,
+        full_df=full_df,
     )
 
     if not fold_results:
-        logger.error("CV loop produced no fold results — aborting post-training steps.")
+        logger.error("CV loop produced no fold results.")
         return None
-
-    # ── 6. Post-training: per-fold evaluation + ensemble ──────────────────
-    # Use extra_smiles_data if available, otherwise fall back to base data
-    ensemble_target = extra_smiles_data if extra_smiles_data else base_smiles_data
-
-    run_ensemble_prediction(
-        fold_results=fold_results,
-        extra_smiles_data=ensemble_target,
-        full_df=full_df,
-        cfg=cfg,
-        vocab_path=vocab_save_path,
-        device=device,
-        run_dir=run_dir,
-    )
 
     logger.info("Pipeline complete. All artefacts saved to: %s", run_dir)
     return run_dir
